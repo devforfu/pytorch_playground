@@ -1,3 +1,4 @@
+import math
 from os.path import expanduser, join
 
 import numpy as np
@@ -7,6 +8,7 @@ from torch import nn
 from torch import optim
 from torch.nn import functional as F
 from torchtext import vocab, data
+from torch.optim.lr_scheduler import _LRScheduler
 
 from fastai.nlp import LanguageModelData
 from fastai.model import fit
@@ -18,16 +20,13 @@ PATH = expanduser(join('~', 'data', 'fastai', 'nietzsche'))
 TRAIN_PATH = join(PATH, 'trn')
 VALID_PATH = join(PATH, 'val')
 
-
-n_hidden = 256
+DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
 class CharSeqStatefulRnn(nn.Module):
-
-    def __init__(self, vocab_size, n_fac, bs):
-        self.n_hidden = n_hidden
+    def __init__(self, vocab_size, n_fac, bs, n_hidden):
         self.vocab_size = vocab_size
-
+        self.n_hidden = n_hidden
         super().__init__()
         self.e = nn.Embedding(vocab_size, n_fac)
         self.rnn = nn.RNN(n_fac, n_hidden)
@@ -37,7 +36,7 @@ class CharSeqStatefulRnn(nn.Module):
     def forward(self, cs):
         bs = cs[0].size(0)
         if self.h.size(1) != bs:
-            self.init_hidden(bs)
+            self.h = self.init_hidden(bs)
         outp, h = self.rnn(self.e(cs), self.h)
         self.h = repackage_var(h)
         return F.log_softmax(self.l_out(outp), dim=-1).view(-1, self.vocab_size)
@@ -76,14 +75,14 @@ class SequenceIterator:
 
     @property
     def completed(self):
-        if self.curr_line >= self.total_lines:
+        if self.curr_line >= self.total_lines - 1:
             return True
         if self.curr_iter >= self.total_iters:
             return True
         return False
 
     def __iter__(self):
-        self.index = self.current = 0
+        self.curr_line = self.curr_iter = 0
         return self
 
     def __next__(self):
@@ -110,32 +109,149 @@ class SequenceIterator:
     def get_batch(self, seq_len):
         i, source = self.curr_line, self.batches
         seq_len = min(seq_len, self.total_lines - 1 - i)
-        X = source[:,       i:      i + seq_len].contiguous()
-        y = source[:, (i + 1):(i + 1) + seq_len].contiguous()
-        return X, y.view(-1)
+        X = source[:,       i:       i + seq_len].contiguous()
+        y = source[:, (i + 1): (i + 1) + seq_len].contiguous()
+        return X, y
+
+
+class CosineAnnealingLR(_LRScheduler):
+
+    def __init__(self, optimizer, t_max=200, eta_min=0.0005, cycle_mult=2, last_epoch=-1):
+        self.t_max = t_max
+        self.eta_min = eta_min
+        self.cycle_mult = cycle_mult
+        self.cycle_epoch = last_epoch
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        self.cycle_epoch += 1
+
+        t_max = self.t_max
+        eta_min = self.eta_min
+        t = self.cycle_epoch % t_max
+
+        learning_rates = []
+        for lr in self.base_lrs:
+            new_lr = eta_min + (lr - eta_min) * (1 + math.cos(math.pi * t / t_max)) / 2
+            learning_rates.append(new_lr)
+
+        if t == 0:
+            self.cycle_epoch = 0
+            self.t_max *= self.cycle_mult
+
+        return learning_rates
+
+
+class RNN(nn.Module):
+
+    def __init__(self, vocab_size, n_factors, batch_size, n_hidden):
+        self.vocab_size = vocab_size
+        self.n_hidden = n_hidden
+
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, n_factors)
+        self.rnn = nn.RNN(n_factors, n_hidden)
+        self.out = nn.Linear(n_hidden, vocab_size)
+        self.h = self.init_hidden(batch_size)
+
+    def forward(self, batch):
+        bs = batch.size(0)
+        if self.h.size(1) != bs:
+            self.h = self.init_hidden(bs)
+        embeddings = self.embed(batch)
+        rnn_outputs, h = self.rnn(embeddings, self.h)
+        self.h = truncate_history(h)
+        softmax = F.log_softmax(self.out(rnn_outputs), dim=-1)
+        return softmax.view(-1, self.vocab_size)
+
+    def init_hidden(self, batch_size):
+        return torch.zeros(1, batch_size, self.n_hidden)
+
+
+def truncate_history(v):
+    if type(v) == torch.Tensor:
+        return v.detach()
+    else:
+        return tuple(truncate_history(x) for x in v)
 
 
 def main():
-    field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
-    iterator = SequenceIterator(indexes[:1024], bptt=10, batch_size=20)
-    for x, y in iterator:
-        print(x)
-        print(y)
-    print('Done')
-
-    # print(indexes)
-
-    text = data.Field(lower=True, tokenize=list)
     bs = 64
     bptt = 8
     n_factors = 42
-    files = dict(train=TRAIN_PATH, validation=VALID_PATH, test=VALID_PATH)
-    md = LanguageModelData.from_text_files(PATH, text, **files,
-                                           bs=bs, bptt=bptt, min_freq=3)
-    print(len(md.trn_dl), md.nt, len(md.trn_ds), len(md.trn_ds[0].text))
-    m = CharSeqStatefulRnn(md.nt, n_factors, bs).cuda()
-    opt = optim.Adam(m.parameters(), 1e-3)
-    fit(m, md, 4, opt, F.nll_loss)
+    n_hidden = 256
+
+    field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
+    iterator = SequenceIterator(indexes, bptt, bs)
+    vocab_size = len(field.vocab.itos)
+
+    model = CharSeqStatefulRnn(vocab_size, n_factors, bs, n_hidden)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
+    model.to(DEVICE)
+
+    alpha = 0.98
+    avg_loss = 0.0
+    batch_num = 0
+
+    for epoch in range(5):
+        epoch_loss = 0
+        for x, y in iterator:
+            batch_num += 1
+            sched.step()
+            model.zero_grad()
+            output = model(x.t().contiguous())
+            loss = F.nll_loss(output, y.t().contiguous().view(-1))
+            loss.backward()
+            optimizer.step()
+            avg_loss = avg_loss*alpha + loss.item()*(1 - alpha)
+            epoch_loss = avg_loss/(1 - alpha**batch_num)
+        print('Epoch %03d loss: %2.4f' % (epoch, epoch_loss))
+
+    # batch_size = 64
+    # bptt = 8
+    # n_factors = 42
+    # n_hidden = 256
+    #
+    # field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
+    # iterator = SequenceIterator(indexes, bptt=bptt, batch_size=batch_size)
+    # vocab_size = len(field.vocab.itos)
+    # device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    #
+    # # model = RNN(vocab_size, 42, batch_size).cuda()
+    # model = CharSeqStatefulRnn(vocab_size, n_factors, batch_size, n_hidden)
+    # model.to(device)
+    # optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    # sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
+    #
+    # for epoch in range(1, 101):
+    #     epoch_loss = 0
+    #     for x, y in iterator:
+    #         sched.step()
+    #         model.zero_grad()
+    #         output = model(x)
+    #         loss = F.nll_loss(output, y)
+    #         loss.backward()
+    #         optimizer.step()
+    #         epoch_loss += loss.item()
+    #     epoch_loss /= iterator.total_iters
+    #     print('Epoch %03d loss: %2.4f' % (epoch, epoch_loss))
+    # print('Done!')
+
+    # TEXT = data.Field(lower=True, tokenize=list)
+    # bs = 64
+    # bptt = 8
+    # n_fac = 42
+    # n_hidden = 256
+    #
+    # FILES = dict(train=TRAIN_PATH, validation=VALID_PATH, test=VALID_PATH)
+    # md = LanguageModelData.from_text_files(PATH, TEXT, **FILES, bs=bs, bptt=bptt, min_freq=3)
+    #
+    # print(len(md.trn_dl), md.nt, len(md.trn_ds), len(md.trn_ds[0].text))
+    #
+    # m = CharSeqStatefulRnn(md.nt, n_fac, 512, n_hidden).cuda()
+    # opt = optim.Adam(m.parameters(), 1e-3)
+    # fit(m, md, 4, opt, F.nll_loss)
 
 
 if __name__ == '__main__':
