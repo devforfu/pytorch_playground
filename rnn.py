@@ -6,14 +6,9 @@ import numpy as np
 import torch
 from torch import nn
 from torch import optim
+from torchtext import data
 from torch.nn import functional as F
-from torchtext import vocab, data
 from torch.optim.lr_scheduler import _LRScheduler
-
-from fastai.nlp import LanguageModelData
-from fastai.model import fit
-from fastai.lm_rnn import repackage_var
-from fastai.core import V
 
 
 PATH = expanduser(join('~', 'data', 'fastai', 'nietzsche'))
@@ -22,27 +17,6 @@ VALID_PATH = join(PATH, 'val')
 
 DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
-
-class CharSeqStatefulRnn(nn.Module):
-    def __init__(self, vocab_size, n_fac, bs, n_hidden):
-        self.vocab_size = vocab_size
-        self.n_hidden = n_hidden
-        super().__init__()
-        self.e = nn.Embedding(vocab_size, n_fac)
-        self.rnn = nn.RNN(n_fac, n_hidden)
-        self.l_out = nn.Linear(n_hidden, vocab_size)
-        self.h = self.init_hidden(bs)
-
-    def forward(self, cs):
-        bs = cs[0].size(0)
-        if self.h.size(1) != bs:
-            self.h = self.init_hidden(bs)
-        outp, h = self.rnn(self.e(cs), self.h)
-        self.h = repackage_var(h)
-        return F.log_softmax(self.l_out(outp), dim=-1).view(-1, self.vocab_size)
-
-    def init_hidden(self, bs):
-        return V(torch.zeros(1, bs, self.n_hidden))
 
 
 def prepare_dataset(filename):
@@ -149,25 +123,24 @@ class CosineAnnealingLR(_LRScheduler):
 
 class RNN(nn.Module):
 
-    def __init__(self, vocab_size, n_factors, batch_size, n_hidden):
+    def __init__(self, vocab_size, n_factors, batch_size, n_hidden, device=DEVICE):
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
+        self.device = device
 
         super().__init__()
         self.embed = nn.Embedding(vocab_size, n_factors)
         self.rnn = nn.RNN(n_factors, n_hidden)
         self.out = nn.Linear(n_hidden, vocab_size)
-        self.h = self.init_hidden(batch_size)
+        self.hidden_state = self.init_hidden(batch_size).to(device)
+        self.to(device)
 
     def forward(self, batch):
-        bs = batch.size(0)
-        if self.h.size(1) != bs:
-            self.h = self.init_hidden(bs)
         embeddings = self.embed(batch)
-        rnn_outputs, h = self.rnn(embeddings, self.h)
-        self.h = truncate_history(h)
-        softmax = F.log_softmax(self.out(rnn_outputs), dim=-1)
-        return softmax.view(-1, self.vocab_size)
+        rnn_outputs, h = self.rnn(embeddings, self.hidden_state)
+        self.hidden_state = truncate_history(h)
+        linear = self.out(rnn_outputs)
+        return F.log_softmax(linear, dim=-1).view(-1, self.vocab_size)
 
     def init_hidden(self, batch_size):
         return torch.zeros(1, batch_size, self.n_hidden)
@@ -206,23 +179,20 @@ def main():
     iterator = SequenceIterator(indexes, bptt, bs)
     vocab_size = len(field.vocab.itos)
 
-    model = CharSeqStatefulRnn(vocab_size, n_factors, bs, n_hidden)
+    model = RNN(vocab_size, n_factors, bs, n_hidden)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
-    model.to(DEVICE)
 
     alpha = 0.98
     avg_loss = 0.0
     batch_num = 0
 
-    for epoch in range(5):
+    for epoch in range(10):
         epoch_loss = 0
         for x, y in iterator:
             batch_num += 1
             sched.step()
             model.zero_grad()
-            # output = model(x.t().contiguous())
-            # loss = F.nll_loss(output, y.t().contiguous().view(-1))
             output = model(x)
             loss = F.nll_loss(output, y.view(-1))
             loss.backward()
