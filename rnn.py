@@ -60,9 +60,14 @@ def prepare_dataset(filename):
 class SequenceIterator:
 
     def __init__(self, seq, bptt=10, batch_size=64, random_length=True):
+        # Converting dataset into batches:
+        # 1) truncate text length to evenly fit into number of batches
+        # 2) reshape the text into N (# of batches) * M (batch size)
+        # 3) transpose to convert into "long" format with fixed number of cols
+
         n_batches = seq.size(0) // batch_size
         truncated = seq[:n_batches * batch_size]
-        batches = truncated.view(batch_size, -1)
+        batches = truncated.view(batch_size, -1).t().contiguous()
 
         self.bptt = bptt
         self.batch_size = batch_size
@@ -70,7 +75,7 @@ class SequenceIterator:
         self.batches = batches
         self.curr_line = 0
         self.curr_iter = 0
-        self.total_lines = batches.size(-1)
+        self.total_lines = batches.size(0)
         self.total_iters = self.total_lines // self.bptt - 1
 
     @property
@@ -109,8 +114,10 @@ class SequenceIterator:
     def get_batch(self, seq_len):
         i, source = self.curr_line, self.batches
         seq_len = min(seq_len, self.total_lines - 1 - i)
-        X = source[:,       i:       i + seq_len].contiguous()
-        y = source[:, (i + 1): (i + 1) + seq_len].contiguous()
+        # X = source[:,       i:      i + seq_len].contiguous()
+        # y = source[:, (i + 1):(i + 1) + seq_len].contiguous()
+        X = source[i:i + seq_len].contiguous()
+        y = source[(i + 1):(i + 1) + seq_len].contiguous()
         return X, y
 
 
@@ -175,6 +182,30 @@ def truncate_history(v):
         return tuple(truncate_history(x) for x in v)
 
 
+# def to_string(field, tensor):
+#     return '\n'.join([
+#         ''.join([
+#             field.vocab.itos[char]
+#             for char in line])
+#         for line in tensor])
+
+
+class StringBuilder:
+    """
+    The helper class used during debugging process to convert tensors with
+    integer indexes into strings with batches of text they represent.
+    """
+    def __init__(self, field):
+        self.field = field
+
+    def __call__(self, tensor):
+        return '\n'.join([
+            ''.join([
+                self.field.vocab.itos[char]
+                for char in line])
+            for line in tensor])
+
+
 def main():
     bs = 64
     bptt = 8
@@ -182,6 +213,7 @@ def main():
     n_hidden = 256
 
     field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
+    to_string = StringBuilder(field)
     iterator = SequenceIterator(indexes, bptt, bs)
     vocab_size = len(field.vocab.itos)
 
@@ -200,8 +232,10 @@ def main():
             batch_num += 1
             sched.step()
             model.zero_grad()
-            output = model(x.t().contiguous())
-            loss = F.nll_loss(output, y.t().contiguous().view(-1))
+            # output = model(x.t().contiguous())
+            # loss = F.nll_loss(output, y.t().contiguous().view(-1))
+            output = model(x)
+            loss = F.nll_loss(output, y.view(-1))
             loss.backward()
             optimizer.step()
             avg_loss = avg_loss*alpha + loss.item()*(1 - alpha)
