@@ -15,8 +15,8 @@ PATH = expanduser(join('~', 'data', 'fastai', 'nietzsche'))
 TRAIN_PATH = join(PATH, 'trn')
 VALID_PATH = join(PATH, 'val')
 
-DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
+DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
 def prepare_dataset(filename):
@@ -95,7 +95,9 @@ class SequenceIterator:
 
 class CosineAnnealingLR(_LRScheduler):
 
-    def __init__(self, optimizer, t_max=200, eta_min=0.0005, cycle_mult=2, last_epoch=-1):
+    def __init__(self, optimizer, t_max=200, eta_min=0.0005,
+                 cycle_mult=2, last_epoch=-1):
+
         self.t_max = t_max
         self.eta_min = eta_min
         self.cycle_mult = cycle_mult
@@ -111,7 +113,8 @@ class CosineAnnealingLR(_LRScheduler):
 
         learning_rates = []
         for lr in self.base_lrs:
-            new_lr = eta_min + (lr - eta_min) * (1 + math.cos(math.pi * t / t_max)) / 2
+            delta = lr - eta_min
+            new_lr = eta_min + delta*(1 + math.cos(math.pi * t/t_max)) / 2
             learning_rates.append(new_lr)
 
         if t == 0:
@@ -123,14 +126,29 @@ class CosineAnnealingLR(_LRScheduler):
 
 class RNN(nn.Module):
 
-    def __init__(self, vocab_size, n_factors, batch_size, n_hidden, device=DEVICE):
+    def __init__(self, vocab_size, n_factors, batch_size, n_hidden,
+                 architecture='rnn', device=DEVICE):
+
+        num_of_states = 1
+
+        if architecture == 'rnn':
+            rnn = nn.RNN
+        elif architecture == 'gru':
+            rnn = nn.GRU
+        elif architecture == 'lstm':
+            rnn = nn.LSTM
+            num_of_states += 1
+        else:
+            raise ValueError(f'unexpected network type: {architecture}')
+
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
+        self.num_of_states = num_of_states
         self.device = device
 
         super().__init__()
         self.embed = nn.Embedding(vocab_size, n_factors)
-        self.rnn = nn.RNN(n_factors, n_hidden)
+        self.rnn = rnn(n_factors, n_hidden)
         self.out = nn.Linear(n_hidden, vocab_size)
         self.hidden_state = self.init_hidden(batch_size).to(device)
         self.to(device)
@@ -143,7 +161,7 @@ class RNN(nn.Module):
         return F.log_softmax(linear, dim=-1).view(-1, self.vocab_size)
 
     def init_hidden(self, batch_size):
-        return torch.zeros(1, batch_size, self.n_hidden)
+        return torch.zeros(self.num_of_states, 1, batch_size, self.n_hidden)
 
 
 def truncate_history(v):
@@ -179,15 +197,15 @@ def main():
     iterator = SequenceIterator(indexes, bptt, bs)
     vocab_size = len(field.vocab.itos)
 
-    model = RNN(vocab_size, n_factors, bs, n_hidden)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    model = RNN(vocab_size, n_factors, bs, n_hidden, architecture='lstm')
+    optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
     sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
 
     alpha = 0.98
     avg_loss = 0.0
     batch_num = 0
 
-    for epoch in range(10):
+    for epoch in range(1, 11):
         epoch_loss = 0
         for x, y in iterator:
             batch_num += 1
