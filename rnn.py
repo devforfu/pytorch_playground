@@ -114,8 +114,6 @@ class SequenceIterator:
     def get_batch(self, seq_len):
         i, source = self.curr_line, self.batches
         seq_len = min(seq_len, self.total_lines - 1 - i)
-        # X = source[:,       i:      i + seq_len].contiguous()
-        # y = source[:, (i + 1):(i + 1) + seq_len].contiguous()
         X = source[i:i + seq_len].contiguous()
         y = source[(i + 1):(i + 1) + seq_len].contiguous()
         return X, y
@@ -182,14 +180,6 @@ def truncate_history(v):
         return tuple(truncate_history(x) for x in v)
 
 
-# def to_string(field, tensor):
-#     return '\n'.join([
-#         ''.join([
-#             field.vocab.itos[char]
-#             for char in line])
-#         for line in tensor])
-
-
 class StringBuilder:
     """
     The helper class used during debugging process to convert tensors with
@@ -213,7 +203,6 @@ def main():
     n_hidden = 256
 
     field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
-    to_string = StringBuilder(field)
     iterator = SequenceIterator(indexes, bptt, bs)
     vocab_size = len(field.vocab.itos)
 
@@ -241,51 +230,6 @@ def main():
             avg_loss = avg_loss*alpha + loss.item()*(1 - alpha)
             epoch_loss = avg_loss/(1 - alpha**batch_num)
         print('Epoch %03d loss: %2.4f' % (epoch, epoch_loss))
-
-    # batch_size = 64
-    # bptt = 8
-    # n_factors = 42
-    # n_hidden = 256
-    #
-    # field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
-    # iterator = SequenceIterator(indexes, bptt=bptt, batch_size=batch_size)
-    # vocab_size = len(field.vocab.itos)
-    # device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    #
-    # # model = RNN(vocab_size, 42, batch_size).cuda()
-    # model = CharSeqStatefulRnn(vocab_size, n_factors, batch_size, n_hidden)
-    # model.to(device)
-    # optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    # sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
-    #
-    # for epoch in range(1, 101):
-    #     epoch_loss = 0
-    #     for x, y in iterator:
-    #         sched.step()
-    #         model.zero_grad()
-    #         output = model(x)
-    #         loss = F.nll_loss(output, y)
-    #         loss.backward()
-    #         optimizer.step()
-    #         epoch_loss += loss.item()
-    #     epoch_loss /= iterator.total_iters
-    #     print('Epoch %03d loss: %2.4f' % (epoch, epoch_loss))
-    # print('Done!')
-
-    # TEXT = data.Field(lower=True, tokenize=list)
-    # bs = 64
-    # bptt = 8
-    # n_fac = 42
-    # n_hidden = 256
-    #
-    # FILES = dict(train=TRAIN_PATH, validation=VALID_PATH, test=VALID_PATH)
-    # md = LanguageModelData.from_text_files(PATH, TEXT, **FILES, bs=bs, bptt=bptt, min_freq=3)
-    #
-    # print(len(md.trn_dl), md.nt, len(md.trn_ds), len(md.trn_ds[0].text))
-    #
-    # m = CharSeqStatefulRnn(md.nt, n_fac, 512, n_hidden).cuda()
-    # opt = optim.Adam(m.parameters(), 1e-3)
-    # fit(m, md, 4, opt, F.nll_loss)
 
 
 if __name__ == '__main__':
