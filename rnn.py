@@ -1,4 +1,6 @@
 import math
+import textwrap
+from itertools import chain
 from os.path import expanduser, join
 
 import numpy as np
@@ -6,29 +8,61 @@ import numpy as np
 import torch
 from torch import nn
 from torch import optim
-from torchtext import data
+from torchtext.data import Field
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import _LRScheduler
 
 
 PATH = expanduser(join('~', 'data', 'fastai', 'nietzsche'))
-TRAIN_PATH = join(PATH, 'trn')
-VALID_PATH = join(PATH, 'val')
+TRAIN_PATH = join(PATH, 'trn', 'train.txt')
+VALID_PATH = join(PATH, 'val', 'valid.txt')
 
 
 DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
-def prepare_dataset(filename):
-    text = []
-    field = data.Field(lower=True, tokenize=list)
-    with open(filename) as file:
-        for line in file:
-            text += field.preprocess(line)
-    text += '<eos>'
-    field.build_vocab(text, min_freq=3)
-    indexes = field.numericalize(text)
-    return field, indexes.view(-1)
+# def prepare_dataset(filename):
+#     text = []
+#     field = Field(lower=True, tokenize=list)
+#     with open(filename) as file:
+#         for line in file:
+#             text += field.preprocess(line)
+#     text += '<eos>'
+#     field.build_vocab(text, min_freq=3)
+#     indexes = field.numericalize(text)
+#     return field, indexes.view(-1)
+
+
+class Dataset:
+
+    def __init__(self, field: Field, min_freq: int=1):
+        self.field = field
+        self.min_freq = min_freq
+        self.subsets = {}
+        self.vocab_size = None
+
+    def build(self, train: str, valid: str, iterator_factory):
+        content_per_file = {}
+        for name, path in [('train', train), ('valid', valid)]:
+            file_content = []
+            with open(path) as file:
+                for line in file:
+                    file_content += self.field.preprocess(line)
+            content_per_file[name] = file_content
+
+        train_text = content_per_file['train']
+        self.field.build_vocab(train_text, min_freq=self.min_freq)
+        self.vocab_size = len(self.field.vocab.itos)
+
+        for name, content in content_per_file.items():
+            sequence = self.field.numericalize(content)
+            iterator = iterator_factory(sequence.view(-1))
+            self.subsets[name] = iterator
+
+    def __getitem__(self, item):
+        if item not in self.subsets:
+            raise ValueError(f'Unexpected dataset name: {item}')
+        return self.subsets[item]
 
 
 class SequenceIterator:
@@ -127,33 +161,25 @@ class CosineAnnealingLR(_LRScheduler):
 class RNN(nn.Module):
 
     def __init__(self, vocab_size, n_factors, batch_size, n_hidden,
-                 architecture='rnn', device=DEVICE):
-
-        num_of_states = 1
-
-        if architecture == 'rnn':
-            rnn = nn.RNN
-        elif architecture == 'gru':
-            rnn = nn.GRU
-        elif architecture == 'lstm':
-            rnn = nn.LSTM
-            num_of_states += 1
-        else:
-            raise ValueError(f'unexpected network type: {architecture}')
+                 architecture=nn.RNN, device=DEVICE):
 
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
-        self.num_of_states = num_of_states
         self.device = device
 
         super().__init__()
         self.embed = nn.Embedding(vocab_size, n_factors)
-        self.rnn = rnn(n_factors, n_hidden)
+        self.rnn = architecture(n_factors, n_hidden)
         self.out = nn.Linear(n_hidden, vocab_size)
         self.hidden_state = self.init_hidden(batch_size).to(device)
+        self.batch_size = batch_size
         self.to(device)
 
     def forward(self, batch):
+        bs = batch.size(1)
+        if bs != self.batch_size:
+            self.hidden_state = self.init_hidden(bs)
+            self.batch_size = bs
         embeddings = self.embed(batch)
         rnn_outputs, h = self.rnn(embeddings, self.hidden_state)
         self.hidden_state = truncate_history(h)
@@ -161,7 +187,11 @@ class RNN(nn.Module):
         return F.log_softmax(linear, dim=-1).view(-1, self.vocab_size)
 
     def init_hidden(self, batch_size):
-        return torch.zeros(self.num_of_states, 1, batch_size, self.n_hidden)
+        if type(self.rnn) == nn.LSTM:
+            h = torch.zeros(2, 1, batch_size, self.n_hidden)
+        else:
+            h = torch.zeros(1, batch_size, self.n_hidden)
+        return h.to(self.device)
 
 
 def truncate_history(v):
@@ -192,32 +222,56 @@ def main():
     bptt = 8
     n_factors = 42
     n_hidden = 256
+    n_epochs = 20
 
-    field, indexes = prepare_dataset(join(TRAIN_PATH, 'train.txt'))
-    iterator = SequenceIterator(indexes, bptt, bs)
-    vocab_size = len(field.vocab.itos)
+    field = Field(lower=True, tokenize=list)
+    dataset = Dataset(field, min_freq=5)
+    factory = lambda text: SequenceIterator(text, bptt, bs)
+    dataset.build(TRAIN_PATH, VALID_PATH, factory)
 
-    model = RNN(vocab_size, n_factors, bs, n_hidden, architecture='lstm')
+    model = RNN(dataset.vocab_size, n_factors, bs, n_hidden, architecture=nn.LSTM)
     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
-    sched = CosineAnnealingLR(optimizer, t_max=iterator.total_iters)
+    sched = CosineAnnealingLR(optimizer, t_max=dataset['train'].total_iters)
 
     alpha = 0.98
-    avg_loss = 0.0
-    batch_num = 0
+    train_avg_loss, valid_avg_loss = 0., 0.
+    train_batch_num, valid_batch_num = 0, 0
 
-    for epoch in range(1, 11):
-        epoch_loss = 0
-        for x, y in iterator:
-            batch_num += 1
+    for epoch in range(1, n_epochs + 1):
+        for x, y in dataset['train']:
+            train_batch_num += 1
             sched.step()
             model.zero_grad()
             output = model(x)
             loss = F.nll_loss(output, y.view(-1))
             loss.backward()
             optimizer.step()
-            avg_loss = avg_loss*alpha + loss.item()*(1 - alpha)
-            epoch_loss = avg_loss/(1 - alpha**batch_num)
-        print('Epoch %03d loss: %2.4f' % (epoch, epoch_loss))
+            train_avg_loss = train_avg_loss*alpha + loss.item()*(1 - alpha)
+
+        for x, y in dataset['valid']:
+            valid_batch_num += 1
+            with torch.no_grad():
+                loss = F.nll_loss(model(x), y.view(-1))
+                valid_avg_loss = valid_avg_loss*alpha + loss.item()*(1 - alpha)
+
+        train_epoch_loss = train_avg_loss / (1 - alpha ** train_batch_num)
+        valid_epoch_loss = valid_avg_loss / (1 - alpha ** valid_batch_num)
+
+        print('Epoch %03d - train: %2.4f - valid: %2.4f' % (
+            epoch, train_epoch_loss, valid_epoch_loss
+        ))
+
+    seed = 'For thos'
+    string = seed
+    for i in range(500):
+        indexes = field.numericalize(seed)
+        p = model(indexes.transpose(0, 1))
+        r = torch.multinomial(p[-1].exp(), 1)
+        value = field.vocab.itos[r[0]]
+        seed = seed[1:] + value
+        string += value
+
+    print('\n'.join(textwrap.wrap(string, width=80)))
 
 
 if __name__ == '__main__':
