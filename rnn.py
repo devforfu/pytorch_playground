@@ -45,9 +45,17 @@ class Dataset:
         content_per_file = {}
         for name, path in [('train', train), ('valid', valid)]:
             file_content = []
+            new_line = False
             with open(path) as file:
                 for line in file:
+                    if line.endswith('\n'):
+                        new_line = True
+                        if line == '\n':
+                            continue
                     file_content += self.field.preprocess(line)
+                    if new_line:
+                        file_content.append(' ')
+                        new_line = False
             content_per_file[name] = file_content
 
         train_text = content_per_file['train']
