@@ -2,7 +2,6 @@ import os
 import sys
 import math
 import textwrap
-from collections import defaultdict
 from os.path import expanduser, join
 
 import numpy as np
@@ -425,63 +424,6 @@ class Loop:
         self.stepper.save_model(path)
 
 
-# def main():
-#     bs = 64
-#     bptt = 8
-#     n_factors = 42
-#     n_hidden = 256
-#     n_epochs = 20
-#
-#     field = Field(lower=True, tokenize=list)
-#     dataset = Dataset(field, min_freq=5)
-#     factory = lambda text: SequenceIterator(text, bptt, bs)
-#     dataset.build(TRAIN_PATH, VALID_PATH, factory)
-#
-#     model = RNN(dataset.vocab_size, n_factors, bs, n_hidden, architecture=nn.LSTM)
-#     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
-#     sched = CosineAnnealingLR(optimizer, t_max=dataset['train'].total_iters)
-#
-#     alpha = 0.98
-#     train_avg_loss, valid_avg_loss = 0., 0.
-#     train_batch_num, valid_batch_num = 0, 0
-#
-#     for epoch in range(1, n_epochs + 1):
-#         for x, y in dataset['train']:
-#             train_batch_num += 1
-#             sched.step()
-#             model.zero_grad()
-#             output = model(x)
-#             loss = F.nll_loss(output, y.view(-1))
-#             loss.backward()
-#             optimizer.step()
-#             train_avg_loss = train_avg_loss*alpha + loss.item()*(1 - alpha)
-#
-#         for x, y in dataset['valid']:
-#             valid_batch_num += 1
-#             with torch.no_grad():
-#                 loss = F.nll_loss(model(x), y.view(-1))
-#                 valid_avg_loss = valid_avg_loss*alpha + loss.item()*(1 - alpha)
-#
-#         train_epoch_loss = train_avg_loss / (1 - alpha ** train_batch_num)
-#         valid_epoch_loss = valid_avg_loss / (1 - alpha ** valid_batch_num)
-#
-#         print('Epoch %03d - train: %2.4f - valid: %2.4f' % (
-#             epoch, train_epoch_loss, valid_epoch_loss
-#         ))
-#
-#     seed = 'For thos'
-#     string = seed
-#     for i in range(500):
-#         indexes = field.numericalize(seed)
-#         p = model(indexes.transpose(0, 1))
-#         r = torch.multinomial(p[-1].exp(), 1)
-#         value = field.vocab.itos[r[0]]
-#         seed = seed[1:] + value
-#         string += value
-#
-#     print('\n'.join(textwrap.wrap(string, width=80)))
-
-
 def generate_text(model, field, seed, n=500):
     string = seed
     for i in range(n):
@@ -502,7 +444,7 @@ def pretty_print(text, width=80):
 def main():
     bs = 64
     bptt = 8
-    n_factors = 100
+    n_factors = 50
     n_hidden = 256
     n_epochs = 100
 
@@ -515,7 +457,7 @@ def main():
     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
     sched = CosineAnnealingLR(optimizer, t_max=dataset['train'].total_iters)
 
-    early_stopping, logger = EarlyStopping(), Logger()
+    early_stopping, logger = EarlyStopping(patience=10), Logger()
     stepper = Stepper(model, optimizer, sched, F.nll_loss)
     loop = Loop(stepper)
 
