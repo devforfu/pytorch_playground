@@ -1,6 +1,8 @@
+import os
+import sys
 import math
 import textwrap
-from itertools import chain
+from collections import defaultdict
 from os.path import expanduser, join
 
 import numpy as np
@@ -231,12 +233,278 @@ class StringBuilder:
             for line in tensor])
 
 
+class Stepper:
+
+    def __init__(self, model, optimizer, schedule, loss):
+        schedule.step()
+        self.model = model
+        self.optimizer = optimizer
+        self.schedule = schedule
+        self.loss = loss
+
+    def step(self, x, y, train=True):
+        with torch.set_grad_enabled(train):
+            out = self.model(x)
+            loss = self.loss(out, y.view(-1))
+            if train:
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                self.schedule.step()
+        return loss.item()
+
+    def save_model(self, path):
+        torch.save(self.model.state_dict(), path)
+
+
+class Callback:
+
+    def training_start(self):
+        pass
+
+    def training_end(self):
+        pass
+
+    def epoch_start(self, epoch, phase):
+        pass
+
+    def epoch_end(self, epoch, phase):
+        pass
+
+    def batch_start(self, epoch, phase):
+        pass
+
+    def batch_end(self, epoch, phase):
+        pass
+
+
+class CallbackGroup(Callback):
+
+    def __init__(self, callbacks=None):
+        self.callbacks = callbacks or []
+
+    def training_start(self):
+        for cb in self.callbacks: cb.training_start()
+
+    def training_end(self):
+        for cb in self.callbacks: cb.training_end()
+
+    def epoch_start(self, epoch, phase):
+        for cb in self.callbacks: cb.epoch_start(epoch, phase)
+
+    def epoch_end(self, epoch, phase):
+        for cb in self.callbacks: cb.epoch_end(epoch, phase)
+
+    def batch_start(self, epoch, phase):
+        for cb in self.callbacks: cb.batch_start(epoch, phase)
+
+    def batch_end(self, epoch, phase):
+        for cb in self.callbacks: cb.batch_start(epoch, phase)
+
+    def set_loop(self, loop):
+        for cb in self.callbacks: cb.loop = loop
+
+
+class Logger(Callback):
+
+    def __init__(self, streams=None):
+        self.streams = streams or [sys.stdout]
+        self.epoch_history = {}
+        self.curr_epoch = 0
+
+    def epoch_end(self, epoch, phase):
+        if self.curr_epoch != epoch:
+            metrics = ' '.join([
+                f'{name: >5s} - {loss:2.4f}'
+                for name, loss in self.epoch_history.items()])
+            string = f'Epoch {epoch:4d}: {metrics}\n'
+            for stream in self.streams:
+                stream.write(string)
+                stream.flush()
+            self.curr_epoch = epoch
+
+        self.epoch_history[phase.name] = phase.avg_loss
+
+
+class EarlyStopping(Callback):
+
+    def __init__(self, patience=3, phase='valid', metric='avg_loss',
+                 folder=None, better=min, save_model=True):
+
+        self.patience = patience
+        self.phase = phase
+        self.metric = metric
+        self.folder = folder or os.getcwd()
+        self.better = better
+        self.save_model = save_model
+        self.no_improvement = None
+        self.best_value = None
+        self.best_model = None
+        self.stopped_on_epoch = None
+        self.loop = None
+
+    def set_loop(self, loop):
+        self.loop = loop
+
+    def training_start(self):
+        assert self.loop is not None
+        self.no_improvement = 0
+
+    def epoch_end(self, epoch, phase):
+        if phase.name != self.phase:
+            return
+
+        value = getattr(phase, self.metric)
+        if not value:
+            return
+
+        best_value = self.best_value or value
+        better = self.better(best_value, value) == value
+        if not better:
+            self.no_improvement += 1
+        else:
+            path = f'model_{self.phase}_{self.metric}_{value:2.4f}.weights'
+            self.best_value = value
+            self.no_improvement = 0
+            if self.save_model:
+                best_model = join(self.folder, path)
+                self.loop.save_model(best_model)
+                self.best_model = best_model
+
+        if self.no_improvement >= self.patience:
+            self.loop.stop = True
+            self.stopped_on_epoch = epoch
+
+
+class Phase:
+
+    def __init__(self, name, dataset):
+        self.name = name
+        self.dataset = dataset
+        self.batch_num = 0
+        self.avg_loss = 0
+
+    def __repr__(self):
+        return f'<Phase: {self.name}, avg_loss: {self.avg_loss:2.4f}>'
+
+
+class Loop:
+
+    def __init__(self, stepper, alpha=0.98):
+        self.stepper = stepper
+        self.alpha = alpha
+        self.stop = False
+
+    def run(self, train_data, valid_data, epochs=100, callbacks=None):
+        phases = [
+            Phase(name='train', dataset=train_data),
+            Phase(name='valid', dataset=valid_data)
+        ]
+
+        cb = CallbackGroup(callbacks)
+        cb.set_loop(self)
+        cb.training_start()
+
+        a = self.alpha
+        for epoch in range(epochs):
+            if self.stop:
+                break
+            for phase in phases:
+                cb.epoch_start(epoch, phase)
+                is_training = phase.name == 'train'
+                for x, y in phase.dataset:
+                    phase.batch_num += 1
+                    cb.batch_start(epoch, phase)
+                    loss = self.stepper.step(x, y, is_training)
+                    phase.avg_loss = phase.avg_loss*a + loss*(1 - a)
+                    cb.batch_end(epoch, phase)
+                cb.epoch_end(epoch, phase)
+        cb.training_end()
+
+    def save_model(self, path):
+        self.stepper.save_model(path)
+
+
+# def main():
+#     bs = 64
+#     bptt = 8
+#     n_factors = 42
+#     n_hidden = 256
+#     n_epochs = 20
+#
+#     field = Field(lower=True, tokenize=list)
+#     dataset = Dataset(field, min_freq=5)
+#     factory = lambda text: SequenceIterator(text, bptt, bs)
+#     dataset.build(TRAIN_PATH, VALID_PATH, factory)
+#
+#     model = RNN(dataset.vocab_size, n_factors, bs, n_hidden, architecture=nn.LSTM)
+#     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
+#     sched = CosineAnnealingLR(optimizer, t_max=dataset['train'].total_iters)
+#
+#     alpha = 0.98
+#     train_avg_loss, valid_avg_loss = 0., 0.
+#     train_batch_num, valid_batch_num = 0, 0
+#
+#     for epoch in range(1, n_epochs + 1):
+#         for x, y in dataset['train']:
+#             train_batch_num += 1
+#             sched.step()
+#             model.zero_grad()
+#             output = model(x)
+#             loss = F.nll_loss(output, y.view(-1))
+#             loss.backward()
+#             optimizer.step()
+#             train_avg_loss = train_avg_loss*alpha + loss.item()*(1 - alpha)
+#
+#         for x, y in dataset['valid']:
+#             valid_batch_num += 1
+#             with torch.no_grad():
+#                 loss = F.nll_loss(model(x), y.view(-1))
+#                 valid_avg_loss = valid_avg_loss*alpha + loss.item()*(1 - alpha)
+#
+#         train_epoch_loss = train_avg_loss / (1 - alpha ** train_batch_num)
+#         valid_epoch_loss = valid_avg_loss / (1 - alpha ** valid_batch_num)
+#
+#         print('Epoch %03d - train: %2.4f - valid: %2.4f' % (
+#             epoch, train_epoch_loss, valid_epoch_loss
+#         ))
+#
+#     seed = 'For thos'
+#     string = seed
+#     for i in range(500):
+#         indexes = field.numericalize(seed)
+#         p = model(indexes.transpose(0, 1))
+#         r = torch.multinomial(p[-1].exp(), 1)
+#         value = field.vocab.itos[r[0]]
+#         seed = seed[1:] + value
+#         string += value
+#
+#     print('\n'.join(textwrap.wrap(string, width=80)))
+
+
+def generate_text(model, field, seed, n=500):
+    string = seed
+    for i in range(n):
+        indexes = field.numericalize(string)
+        predictions = model(indexes.transpose(0, 1))
+        last_output = predictions[-1]
+        [most_probable] = torch.multinomial(last_output.exp(), 1)
+        char = field.vocab.itos[most_probable]
+        seed = seed[1:] + char
+        string += char
+    return string
+
+
+def pretty_print(text, width=80):
+    print('\n'.join(textwrap.wrap(text, width=width)))
+
+
 def main():
     bs = 64
     bptt = 8
-    n_factors = 42
+    n_factors = 100
     n_hidden = 256
-    n_epochs = 20
+    n_epochs = 100
 
     field = Field(lower=True, tokenize=list)
     dataset = Dataset(field, min_freq=5)
@@ -247,45 +515,18 @@ def main():
     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
     sched = CosineAnnealingLR(optimizer, t_max=dataset['train'].total_iters)
 
-    alpha = 0.98
-    train_avg_loss, valid_avg_loss = 0., 0.
-    train_batch_num, valid_batch_num = 0, 0
+    early_stopping, logger = EarlyStopping(), Logger()
+    stepper = Stepper(model, optimizer, sched, F.nll_loss)
+    loop = Loop(stepper)
 
-    for epoch in range(1, n_epochs + 1):
-        for x, y in dataset['train']:
-            train_batch_num += 1
-            sched.step()
-            model.zero_grad()
-            output = model(x)
-            loss = F.nll_loss(output, y.view(-1))
-            loss.backward()
-            optimizer.step()
-            train_avg_loss = train_avg_loss*alpha + loss.item()*(1 - alpha)
+    loop.run(train_data=dataset['train'],
+             valid_data=dataset['valid'],
+             epochs=n_epochs,
+             callbacks=[early_stopping, logger])
 
-        for x, y in dataset['valid']:
-            valid_batch_num += 1
-            with torch.no_grad():
-                loss = F.nll_loss(model(x), y.view(-1))
-                valid_avg_loss = valid_avg_loss*alpha + loss.item()*(1 - alpha)
-
-        train_epoch_loss = train_avg_loss / (1 - alpha ** train_batch_num)
-        valid_epoch_loss = valid_avg_loss / (1 - alpha ** valid_batch_num)
-
-        print('Epoch %03d - train: %2.4f - valid: %2.4f' % (
-            epoch, train_epoch_loss, valid_epoch_loss
-        ))
-
-    seed = 'For thos'
-    string = seed
-    for i in range(500):
-        indexes = field.numericalize(seed)
-        p = model(indexes.transpose(0, 1))
-        r = torch.multinomial(p[-1].exp(), 1)
-        value = field.vocab.itos[r[0]]
-        seed = seed[1:] + value
-        string += value
-
-    print('\n'.join(textwrap.wrap(string, width=80)))
+    model.load_state_dict(torch.load(early_stopping.best_model))
+    text = generate_text(model, field, seed='For thos')
+    pretty_print(text)
 
 
 if __name__ == '__main__':
