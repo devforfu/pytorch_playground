@@ -21,18 +21,6 @@ VALID_PATH = join(PATH, 'val', 'valid.txt')
 DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
-# def prepare_dataset(filename):
-#     text = []
-#     field = Field(lower=True, tokenize=list)
-#     with open(filename) as file:
-#         for line in file:
-#             text += field.preprocess(line)
-#     text += '<eos>'
-#     field.build_vocab(text, min_freq=3)
-#     indexes = field.numericalize(text)
-#     return field, indexes.view(-1)
-
-
 class Dataset:
 
     def __init__(self, field: Field, min_freq: int=1):
@@ -74,7 +62,10 @@ class Dataset:
 
 
 class SequenceIterator:
-
+    """
+    A simple iterator to convert an array of encoded characters into group of
+    batches reshaped into format, appropriate for the RNN training process.
+    """
     def __init__(self, seq, bptt=10, batch_size=64, random_length=True):
         # Converting dataset into batches:
         # 1) truncate text length to evenly fit into number of batches
@@ -119,15 +110,26 @@ class SequenceIterator:
         return batch
 
     def get_sequence_length(self):
-        seq_len = self.bptt
-        if self.random_length is not None:
-            bptt = self.bptt
-            if np.random.random() >= 0.95:
-                bptt /= 2
-            seq_len = max(5, int(np.random.normal(bptt, 5)))
+        """
+        Returns a length of sequence taken from the dataset to form a batch.
+
+        By default, this value is based on the value of bptt parameter but
+        randomized during training process to pick sequences of characters with
+        a bit different length.
+        """
+        if self.random_length is None:
+            return self.bptt
+        bptt = self.bptt
+        if np.random.random() >= 0.95:
+            bptt /= 2
+        seq_len = max(5, int(np.random.normal(bptt, 5)))
         return seq_len
 
     def get_batch(self, seq_len):
+        """
+        Picks training and target batches from the source depending on current
+        iteration number.
+        """
         i, source = self.curr_line, self.batches
         seq_len = min(seq_len, self.total_lines - 1 - i)
         X = source[i:i + seq_len].contiguous()
@@ -136,7 +138,10 @@ class SequenceIterator:
 
 
 class CosineAnnealingLR(_LRScheduler):
-
+    """
+    A scheduler implementing cosine annealing with restarts and an increasing
+    period of the decay.
+    """
     def __init__(self, optimizer, t_max=200, eta_min=0.0005,
                  cycle_mult=2, last_epoch=-1):
 
@@ -196,6 +201,7 @@ class RNN(nn.Module):
 
     def init_hidden(self, batch_size):
         if type(self.rnn) == nn.LSTM:
+            # an LSTM cell requires two hidden states
             h = torch.zeros(2, 1, batch_size, self.n_hidden)
         else:
             h = torch.zeros(1, batch_size, self.n_hidden)
