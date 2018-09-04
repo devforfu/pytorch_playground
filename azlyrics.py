@@ -1,3 +1,13 @@
+"""
+An AZLyrics parsing tool.
+
+The tool downloads lyrics from the website and saves each song into separate
+file. It also creates a CSV file with song titles.
+
+Note that the downloaded texts can be used only for educational and personal
+purposes. Please visit the website to get familiar with license and privacy
+policy: https://www.azlyrics.com
+"""
 import os
 import time
 import argparse
@@ -18,6 +28,12 @@ class AZLyricsParser:
     The scrapper tries to gather texts without increasing server's load too
     much, and makes effort to prevent getting into black list by making random
     long delays between requests.
+
+    Parameters:
+        throttling: Mean value of normal distribution used to generate random
+            delays between HTTP requests.
+        proxy: Optional dictionary with SOCKS proxy definition.
+
     """
     base_url = 'https://www.azlyrics.com'
 
