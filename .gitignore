@@ -4,3 +4,4 @@
 **/*.py[cod]
 ~*
 *.weights
+*.ini

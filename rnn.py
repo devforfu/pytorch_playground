@@ -67,7 +67,9 @@ class SequenceIterator:
     A simple iterator to convert an array of encoded characters into group of
     batches reshaped into format, appropriate for the RNN training process.
     """
-    def __init__(self, seq, bptt=10, batch_size=64, random_length=True):
+    def __init__(self, seq, bptt=10, batch_size=64, random_length=True,
+                 flatten_target=True):
+
         # Converting dataset into batches:
         # 1) truncate text length to evenly fit into number of batches
         # 2) reshape the text into N (# of batches) * M (batch size)
@@ -80,6 +82,7 @@ class SequenceIterator:
         self.bptt = bptt
         self.batch_size = batch_size
         self.random_length = random_length
+        self.flatten_target = flatten_target
         self.batches = batches
         self.curr_line = 0
         self.curr_iter = 0
@@ -135,6 +138,8 @@ class SequenceIterator:
         seq_len = min(seq_len, self.total_lines - 1 - i)
         X = source[i:i + seq_len].contiguous()
         y = source[(i + 1):(i + 1) + seq_len].contiguous()
+        if self.flatten_target:
+            y = y.view(-1)
         return X, y
 
 
