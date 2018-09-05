@@ -169,13 +169,15 @@ class Checkpoint(ImprovementTracker):
     Saves model attached to the loop each time when tracked performance metric
     is improved, or on each iteration if required.
     """
-    def __init__(self, folder=None, save_best_only=False,
-                 filename='model_{phase}_{metric}_{value}.weights', **kwargs):
+    def __init__(self, folder=None, save_best_only=True,
+                 filename='model_{phase}_{metric}_{value:2.4f}.weights',
+                 **kwargs):
 
         super().__init__(**kwargs)
         self.folder = folder or os.getcwd()
         self.save_best_only = save_best_only
         self.filename = filename
+        self.best_model = None
 
     @property
     def need_to_save(self):
@@ -191,6 +193,10 @@ class Checkpoint(ImprovementTracker):
         )
 
     def epoch_end(self, epoch, phase):
+        if self.phase != phase.name:
+            return
+        super().epoch_end(epoch, phase)
         if self.need_to_save:
             best_model = join(self.folder, self.get_name())
             self.loop.save_model(best_model)
+            self.best_model = best_model
