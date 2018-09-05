@@ -14,7 +14,7 @@ from core.text import TextDataset
 from core.loop import Loop, Stepper
 from core.iterators import SequenceIterator
 from core.schedule import CosineAnnealingLR
-from core.callbacks import EarlyStopping, Checkpoint, Logger
+from core.callbacks import EarlyStopping, Checkpoint, Logger, History
 
 
 ROOT = expanduser(join('~', 'data', 'fastai', 'nietzsche'))
@@ -111,14 +111,17 @@ def main():
     scheduler = CosineAnnealingLR(optimizer, t_max=cycle_length)
     loop = Loop(Stepper(model, optimizer, scheduler, F.nll_loss))
 
-    checkpoint = Checkpoint()
-
     loop.run(train_data=dataset['train'],
              valid_data=dataset['valid'],
              epochs=n_epochs,
-             callbacks=[EarlyStopping(patience=3), Logger(), checkpoint])
+             callbacks=[
+                 EarlyStopping(patience=3),
+                 Logger(),
+                 History(),
+                 Checkpoint()])
 
-    model.load_state_dict(torch.load(checkpoint.best_model))
+    best_model = loop['Checkpoint'].best_model
+    model.load_state_dict(torch.load(best_model))
     text = generate_text(model, field, seed='For thos')
     pretty_print(text)
 

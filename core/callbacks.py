@@ -36,7 +36,9 @@ class CallbackGroup(Callback):
     appropriate methods calls to the elements of collection.
     """
     def __init__(self, callbacks=None):
-        self.callbacks = callbacks or []
+        callbacks = callbacks or []
+        self.callbacks = callbacks
+        self._callbacks = {type(cb).__name__: cb for cb in self.callbacks}
 
     def training_start(self):
         for cb in self.callbacks: cb.training_start()
@@ -58,6 +60,11 @@ class CallbackGroup(Callback):
 
     def set_loop(self, loop):
         for cb in self.callbacks: cb.loop = loop
+
+    def __getitem__(self, item):
+        if item not in self._callbacks:
+            raise KeyError(f'unknown callback: {item}')
+        return self._callbacks[item]
 
 
 class Logger(Callback):
@@ -108,6 +115,19 @@ class CSVLogger(Logger):
     def training_end(self):
         if self.file:
             self.file.close()
+
+
+class History(Callback):
+
+    def __init__(self):
+        from collections import defaultdict
+        self.history = defaultdict(dict)
+
+    def epoch_end(self, epoch, phase):
+        self.history[epoch][phase.name] = phase.avg_loss
+
+    def training_end(self):
+        self.history = dict(self.history)
 
 
 class ImprovementTracker(Callback):

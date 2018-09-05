@@ -24,6 +24,7 @@ class Loop:
         self.stepper = stepper
         self.alpha = alpha
         self.stop = False
+        self.callbacks = None
 
     def run(self, train_data, valid_data, epochs: int=100, callbacks=None):
         phases = [
@@ -34,6 +35,7 @@ class Loop:
         cb = CallbackGroup(callbacks)
         cb.set_loop(self)
         cb.training_start()
+        self.callbacks = cb
 
         a = self.alpha
         for epoch in range(epochs):
@@ -53,6 +55,9 @@ class Loop:
 
     def save_model(self, path):
         self.stepper.save_model(path)
+
+    def __getitem__(self, item):
+        return self.callbacks[item]
 
 
 class Phase:
