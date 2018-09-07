@@ -28,7 +28,8 @@ DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 class RNN(nn.Module):
 
     def __init__(self, vocab_size, n_factors, batch_size, n_hidden,
-                 n_recurrent=1, architecture=nn.RNN, device=DEVICE):
+                 n_recurrent=1, architecture=nn.RNN, dropout=0.5,
+                 device=DEVICE):
 
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
@@ -37,7 +38,9 @@ class RNN(nn.Module):
 
         super().__init__()
         self.embed = nn.Embedding(vocab_size, n_factors)
-        self.rnn = architecture(n_factors, n_hidden, num_layers=n_recurrent)
+        self.rnn = architecture(
+            n_factors, n_hidden,
+            dropout=dropout, num_layers=n_recurrent)
         self.out = nn.Linear(n_hidden, vocab_size)
         self.hidden_state = self.init_hidden(batch_size).to(device)
         self.batch_size = batch_size
@@ -91,8 +94,8 @@ def main():
     bs = 64
     bptt = 8
     n_factors = 50
-    n_hidden = 256
-    n_recurrent = 1
+    n_hidden = 512
+    n_recurrent = 2
     n_epochs = 100
 
     field = Field(lower=True, tokenize=list)
@@ -106,16 +109,16 @@ def main():
                 n_hidden=n_hidden,
                 n_recurrent=n_recurrent,
                 architecture=nn.LSTM)
-    optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=1e-2)
     cycle_length = dataset['train'].total_iters
-    scheduler = CosineAnnealingLR(optimizer, t_max=cycle_length)
+    scheduler = CosineAnnealingLR(optimizer, t_max=cycle_length, eta_min=1e-5)
     loop = Loop(Stepper(model, optimizer, scheduler, F.nll_loss))
 
     loop.run(train_data=dataset['train'],
              valid_data=dataset['valid'],
              epochs=n_epochs,
              callbacks=[
-                 EarlyStopping(patience=3),
+                 EarlyStopping(patience=50),
                  Logger(),
                  History(),
                  Checkpoint()])

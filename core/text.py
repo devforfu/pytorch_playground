@@ -45,10 +45,14 @@ class Dataset:
 
 class TextDataset:
 
-    def __init__(self, field: Field, min_freq: int=1, append_eos: bool=True):
+    def __init__(self, field: Field, min_freq: int=1, append_eos: bool=True,
+                 keep_new_lines=False, search_pattern='*.txt'):
+
         self.field = field
         self.min_freq = min_freq
         self.append_eos = append_eos
+        self.keep_new_lines = keep_new_lines
+        self.search_pattern = search_pattern
         self.vocab_size = None
         self.subsets = {}
 
@@ -62,7 +66,7 @@ class TextDataset:
             if folder is None:
                 continue
             content = []
-            for filename in Path(folder).glob('*.txt'):
+            for filename in Path(folder).glob(self.search_pattern):
                 new_line = False
                 with open(filename) as file:
                     for line in file:
@@ -72,7 +76,8 @@ class TextDataset:
                                 continue
                         content += self.field.preprocess(line)
                         if new_line:
-                            content.append(' ')
+                            char = '\n' if self.keep_new_lines else ' '
+                            content.append(char)
                             new_line = False
                 if self.append_eos:
                     content.append(['<eos>'])

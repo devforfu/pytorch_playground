@@ -76,12 +76,15 @@ class Logger(Callback):
         streams: A list of file-like objects with `write()` method.
 
     """
-    def __init__(self, streams=None):
+    def __init__(self, streams=None, log_every=1):
         self.streams = streams or [sys.stdout]
+        self.log_every = log_every
         self.epoch_history = {}
         self.curr_epoch = 0
 
     def epoch_end(self, epoch, phase):
+        if epoch % self.log_every != 0:
+            return
         if self.curr_epoch != epoch:
             metrics = ' '.join([
                 f'{name: >5s} - {loss:2.4f}'

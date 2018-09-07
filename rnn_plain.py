@@ -189,11 +189,10 @@ class CosineAnnealingLR(_LRScheduler):
 
 
 class RNN(nn.Module):
-    """
-    Generalized recurrent network class with embeddings.
-    """
+
     def __init__(self, vocab_size, n_factors, batch_size, n_hidden,
-                 n_recurrent=1, architecture=nn.RNN, device=DEVICE):
+                 n_recurrent=1, architecture=nn.RNN, dropout=0.5,
+                 device=DEVICE):
 
         self.vocab_size = vocab_size
         self.n_hidden = n_hidden
@@ -202,7 +201,9 @@ class RNN(nn.Module):
 
         super().__init__()
         self.embed = nn.Embedding(vocab_size, n_factors)
-        self.rnn = architecture(n_factors, n_hidden)
+        self.rnn = architecture(
+            n_factors, n_hidden,
+            dropout=dropout, num_layers=n_recurrent)
         self.out = nn.Linear(n_hidden, vocab_size)
         self.hidden_state = self.init_hidden(batch_size).to(device)
         self.batch_size = batch_size

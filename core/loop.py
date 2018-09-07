@@ -56,6 +56,10 @@ class Loop:
     def save_model(self, path):
         self.stepper.save_model(path)
 
+    @property
+    def lr_schedule(self):
+        return self.stepper.train_learning_rates
+
     def __getitem__(self, item):
         return self.callbacks[item]
 
@@ -94,6 +98,7 @@ class Stepper:
         self.optimizer = optimizer
         self.schedule = schedule
         self.loss = loss
+        self.train_learning_rates = []
 
     def step(self, x, y, train: bool=True):
         """
@@ -117,6 +122,8 @@ class Stepper:
                 loss.backward()
                 self.optimizer.step()
                 self.schedule.step()
+                lrs = self.schedule.get_lr()
+                self.train_learning_rates.append(lrs)
         return loss.item()
 
     def save_model(self, path: str):
