@@ -63,8 +63,7 @@ class FastAIResNet(nn.Module):
         x = F.adaptive_max_pool2d(x, 1)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
-        return x
-        # return F.log_softmax(x, dim=-1)
+        return F.log_softmax(x, dim=-1)
 
 
 def pairs(xs):
@@ -84,14 +83,36 @@ def imshow(image, title=None):
     plt.pause(0.001)
 
 
+# def accuracy(y_true, y_pred):
+#     pass
+
+
+class ConvNet(nn.Module):
+
+    def __init__(self, layers, c):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            nn.Conv2d(layers[i], layers[i + 1], kernel_size=3, stride=2)
+            for i in range(len(layers) - 1)])
+        self.pool = nn.AdaptiveMaxPool2d(1)
+        self.out = nn.Linear(layers[-1], c)
+
+    def forward(self, x):
+        for l in self.layers:
+            x = F.relu(l(x))
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.out(x)
+        return x
+
+
 def main():
     root = Path.home() / 'data' / 'cifar10'
 
     data_transforms = {
         'train': transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomAffine(0, translate=(0.1, 0.1)),
-            transforms.Pad(4),
             transforms.ToTensor(),
             transforms.Normalize(mean=MEAN, std=STD)
         ]),
@@ -107,8 +128,8 @@ def main():
         shuffle = name == 'train'
         datasets[name] = dataset
         loaders[name] = DataLoader(
-            dataset=dataset, batch_size=4,
-            shuffle=shuffle, num_workers=cpu_count())
+            dataset=dataset, batch_size=512,
+            shuffle=shuffle, num_workers=0)
         dataset_sizes[name] = len(dataset)
 
     # class_names = datasets['train'].classes
@@ -116,15 +137,16 @@ def main():
     # out = utils.make_grid(samples)
     # imshow(out, title=[class_names[x] for x in targets])
 
-    model = FastAIResNet([10, 20, 40, 80, 160], 10)
-    model.to(DEVICE)
+    # model = FastAIResNet([10, 20, 40, 80, 160], 10)
+    model = ConvNet([3, 20, 40, 80], 10)
+
     optimizer = optim.Adam(model.parameters(), lr=1e-2)
     schedule = CosineAnnealingLR(
         optimizer, t_max=len(datasets['train']), eta_min=1e-5)
 
-    loop = Loop(model, optimizer, schedule)
-    loop.run(train_data=iter(loaders['train']),
-             valid_data=iter(loaders['valid']),
+    loop = Loop(model, optimizer, schedule, device=DEVICE)
+    loop.run(train_data=loaders['train'],
+             valid_data=loaders['valid'],
              loss_fn=F.cross_entropy,
              callbacks=[Logger()])
 

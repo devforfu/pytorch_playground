@@ -112,7 +112,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=1e-2)
     cycle_length = dataset['train'].total_iters
     scheduler = CosineAnnealingLR(optimizer, t_max=cycle_length, eta_min=1e-5)
-    loop = Loop(model, optimizer, scheduler)
+    loop = Loop(model, optimizer, scheduler, device=DEVICE)
 
     loop.run(train_data=dataset['train'],
              valid_data=dataset['valid'],

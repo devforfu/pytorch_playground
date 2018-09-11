@@ -21,7 +21,12 @@ class Loop:
                 new_loss = old_loss*alpha + (1 - alpha)*new_loss
 
     """
-    def __init__(self, model, optimizer, schedule, alpha: float=0.98):
+    def __init__(self, model, optimizer, schedule, alpha: float=0.98,
+                 device=None):
+
+        device = torch.device(device or 'cpu')
+        model.to(device)
+
         self.model = model
         self.optimizer = optimizer
         self.schedule = schedule
@@ -29,6 +34,8 @@ class Loop:
         self.stop = False
         self.callbacks = None
         self.stepper = None
+        self.device = device
+
 
     def run(self, train_data, valid_data=None, loss_fn=F.nll_loss,
             epochs: int=100, callbacks=None):
@@ -50,11 +57,13 @@ class Loop:
             for phase in phases:
                 cb.epoch_start(epoch, phase)
                 is_training = phase.name == 'train'
-                for x, y in phase.dataset:
+                for batch in phase.dataset:
+                    x, y = [tensor.to(self.device) for tensor in batch]
                     phase.batch_num += 1
                     cb.batch_start(epoch, phase)
                     loss = self.stepper.step(x, y, is_training)
-                    phase.avg_loss = phase.avg_loss*a + loss*(1 - a)
+                    avg_loss = phase.avg_loss * a + loss * (1 - a)
+                    phase.avg_loss = avg_loss / (1 - a**phase.batch_num)
                     cb.batch_end(epoch, phase)
                 cb.epoch_end(epoch, phase)
         cb.training_end()
