@@ -18,15 +18,12 @@ class LabelledImagesDataset:
 
     def __init__(self, batch_size: int=32,
                  image_extensions: str='*.png|*.jpeg|*.tiff|*.bmp',
-                 infinite: bool=True, same_size_batches: bool=False,
-                 one_hot: bool=True, reader=None, **kwargs):
+                 one_hot: bool=True, transforms=None, **kwargs):
 
         self.batch_size = batch_size
         self.image_extensions = image_extensions
-        self.infinite = infinite
-        self.same_size_batches = same_size_batches
         self.one_hot = one_hot
-        self.reader = reader
+        self.transforms = transforms
 
         # should be initialized in descendant classes
         self._uid_to_verbose = None
@@ -37,16 +34,7 @@ class LabelledImagesDataset:
         self._verbose_to_label = None
         self._label_to_verbose = None
         self._one_hot = None
-
         self.init()
-
-        self._x_batches = BatchArrayIterator(
-            self._files, batch_size=self.batch_size, infinite=self.infinite,
-            same_size_batches=self.same_size_batches)
-
-        self._y_batches = BatchArrayIterator(
-            self._one_hot, batch_size=self.batch_size, infinite=self.infinite,
-            same_size_batches=self.same_size_batches)
 
     def init(self):
         raise NotImplementedError()
@@ -70,15 +58,46 @@ class LabelledImagesDataset:
         return np.array([self._label_to_verbose[label] for label in labels])
 
     def __iter__(self):
+        return SupervisedIterator(
+            x=self._files,
+            y=self._one_hot,
+            batch_size=self.batch_size,
+            one_hot=self.one_hot,
+            transforms=self.transforms)
+
+
+class SupervisedIterator:
+
+    def __init__(self, x, y, batch_size, one_hot=True, transforms=None):
+        self.transforms = transforms
+        self.batch_size = batch_size
+        self.one_hot = one_hot
+
+        observations = BatchArrayIterator(
+            x, batch_size=batch_size, infinite=True)
+        targets = BatchArrayIterator(
+            y, batch_size=batch_size, infinite=True)
+
+        self.curr_iter = 0
+        self.steps_ = observations.n_batches
+        self.iter_ = zip(observations, targets)
+
+    def __len__(self):
+        return self.steps_
+
+    def __iter__(self):
+        self.curr_iter = 0
         return self
 
     def __next__(self):
-        x = next(self._x_batches)
-        y = next(self._y_batches)
-        if self.reader is not None:
-            x = [self.reader(path) for path in x]
-        if not self.one_hot:
-            y = np.argmax(y, axis=1)
+        if self.curr_iter >= self.steps_:
+            raise StopIteration()
+
+        x, y = next(self.iter_)
+        if self.transforms is not None:
+            for transform in self.transforms:
+                x, y = transform(x, y)
+        self.curr_iter += 1
         return x, y
 
 
