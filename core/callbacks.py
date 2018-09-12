@@ -86,15 +86,17 @@ class Logger(Callback):
         if epoch % self.log_every != 0:
             return
         if self.curr_epoch != epoch:
-            metrics = ' '.join([
-                f'{name: >5s} - {loss:2.4f}'
-                for name, loss in self.epoch_history.items()])
-            string = f'Epoch {epoch:4d}: {metrics}\n'
+            all_metrics = []
+            for phase_name, metrics in self.epoch_history.items():
+                for name, value in metrics.items():
+                    all_metrics.append(f'{phase_name} {name}: {value:2.4f}')
+            metrics = ' - '.join(all_metrics)
+            string = f'Epoch {epoch:4d} | {metrics}\n'
             for stream in self.streams:
                 stream.write(string)
                 stream.flush()
             self.curr_epoch = epoch
-        self.epoch_history[phase.name] = phase.avg_loss
+        self.epoch_history[phase.name] = phase.metrics
 
 
 class CSVLogger(Logger):

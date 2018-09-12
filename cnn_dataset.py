@@ -83,8 +83,10 @@ def imshow(image, title=None):
     plt.pause(0.001)
 
 
-# def accuracy(y_true, y_pred):
-#     pass
+def accuracy(y_pred, y_true):
+    match = y_pred.argmax(dim=1) == y_true
+    acc = match.type(torch.float).mean()
+    return acc.item()
 
 
 class ConvNet(nn.Module):
@@ -148,7 +150,8 @@ def main():
     loop.run(train_data=loaders['train'],
              valid_data=loaders['valid'],
              loss_fn=F.cross_entropy,
-             callbacks=[Logger()])
+             callbacks=[Logger()],
+             metrics=[accuracy])
 
 
 if __name__ == '__main__':

@@ -38,7 +38,7 @@ class Loop:
 
 
     def run(self, train_data, valid_data=None, loss_fn=F.nll_loss,
-            epochs: int=100, callbacks=None):
+            epochs: int=100, callbacks=None, metrics=None):
 
         phases = [Phase(name='train', dataset=train_data)]
         if valid_data is not None:
@@ -48,7 +48,7 @@ class Loop:
         cb.set_loop(self)
         cb.training_start()
         self.callbacks = cb
-        self.stepper = self.make_stepper(loss_fn)
+        self.stepper = self.make_stepper(loss_fn, metrics)
 
         a = self.alpha
         for epoch in range(epochs):
@@ -61,16 +61,21 @@ class Loop:
                     x, y = [tensor.to(self.device) for tensor in batch]
                     phase.batch_num += 1
                     cb.batch_start(epoch, phase)
-                    loss = self.stepper.step(x, y, is_training)
-                    avg_loss = phase.avg_loss * a + loss * (1 - a)
-                    phase.avg_loss = avg_loss / (1 - a**phase.batch_num)
+                    batch_metrics = self.stepper.step(x, y, is_training)
+                    loss = batch_metrics['loss']
+                    avg_loss = a*phase.avg_loss + (1 - a)*loss
+                    debias_loss = avg_loss/(1 - a**phase.batch_num)
+                    batch_metrics['loss'] = debias_loss
+                    phase.avg_loss = avg_loss
+                    phase.metrics = batch_metrics
                     cb.batch_end(epoch, phase)
                 cb.epoch_end(epoch, phase)
         cb.training_end()
 
-    def make_stepper(self, loss_fn, stepper=None):
+    def make_stepper(self, loss_fn, metrics=None, stepper=None):
         stepper_cls = stepper or Stepper
-        inst = stepper_cls(self.model, self.optimizer, self.schedule, loss_fn)
+        inst = stepper_cls(
+            self.model, self.optimizer, self.schedule, loss_fn, metrics)
         return inst
 
     def save_model(self, path):
@@ -78,7 +83,7 @@ class Loop:
 
     @property
     def lr_schedule(self):
-        return self.stepper.train_learning_rates
+        return self.stepper.learning_rates
 
     def __getitem__(self, item):
         return self.callbacks[item]
@@ -98,6 +103,7 @@ class Phase:
         self.dataset = dataset
         self.batch_num = 0
         self.avg_loss = 0.0
+        self.metrics = None
 
     def __repr__(self):
         return f'<Phase: {self.name}, avg_loss: {self.avg_loss:2.4f}>'
@@ -111,14 +117,15 @@ class Stepper:
     The stepper instance is invoked during each training iteration and returns
     the loss on batch.
     """
-    def __init__(self, model, optimizer, schedule, loss):
+    def __init__(self, model, optimizer, schedule, loss, metrics=None):
         if schedule.last_epoch == -1:
             schedule.step()
         self.model = model
         self.optimizer = optimizer
         self.schedule = schedule
         self.loss = loss
-        self.train_learning_rates = []
+        self.metrics = metrics
+        self.learning_rates = []
 
     def step(self, x, y, train: bool=True):
         """
@@ -134,17 +141,26 @@ class Stepper:
             loss: The loss value on batch.
 
         """
+        metrics = {}
+
         with torch.set_grad_enabled(train):
             out = self.model(x)
             loss = self.loss(out, y)
+            metrics['loss'] = loss.item()
+
+            if self.metrics is not None:
+                for metric in self.metrics:
+                    metrics[metric.__name__] = metric(out.cpu(), y.cpu())
+
             if train:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
                 self.schedule.step()
                 lrs = self.schedule.get_lr()
-                self.train_learning_rates.append(lrs)
-        return loss.item()
+                self.learning_rates.append(lrs)
+
+        return metrics
 
     def save_model(self, path: str):
         """
