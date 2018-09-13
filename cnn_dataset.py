@@ -269,62 +269,6 @@ class FastAIResNet(nn.Module):
         return x
 
 
-# class BnLayer(nn.Module):
-#
-#     def __init__(self, ni, nf, stride=2, kernel_size=3):
-#         super().__init__()
-#         self.conv = nn.Conv2d(ni, nf, kernel_size=kernel_size, stride=stride,
-#                               bias=False, padding=1)
-#         self.a = nn.Parameter(torch.zeros(nf, 1, 1))
-#         self.m = nn.Parameter(torch.ones(nf, 1, 1))
-#
-#     def forward(self, x):
-#         x = F.relu(self.conv(x))
-#         x_chan = x.transpose(0, 1).contiguous().view(x.size(1), -1)
-#         if self.training:
-#             self.means = x_chan.mean(1)[:, None, None]
-#             self.stds = x_chan.std(1)[:, None, None]
-#         return (x - self.means) / self.stds * self.m + self.a
-
-
-class BnLayer(nn.Module):
-
-    def __init__(self, ni, nf, stride=2, kernel_size=3):
-        super().__init__()
-        self.conv = nn.Conv2d(ni, nf, kernel_size=kernel_size, stride=stride,
-                              bias=False, padding=1)
-        self.bn = nn.BatchNorm2d(nf)
-
-    def forward(self, x):
-        return F.relu(self.bn(self.conv(x)))
-
-
-class ResnetLayer(BnLayer):
-
-    def forward(self, x): return x + super().forward(x)
-
-
-class Resnet(nn.Module):
-    def __init__(self, layers, c):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 10, kernel_size=5, stride=1, padding=2)
-        self.layers = nn.ModuleList([BnLayer(layers[i], layers[i + 1])
-                                     for i in range(len(layers) - 1)])
-        self.layers2 = nn.ModuleList([ResnetLayer(layers[i + 1], layers[i + 1], 1)
-                                      for i in range(len(layers) - 1)])
-        self.layers3 = nn.ModuleList([ResnetLayer(layers[i + 1], layers[i + 1], 1)
-                                      for i in range(len(layers) - 1)])
-        self.out = nn.Linear(layers[-1], c)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        for l, l2, l3 in zip(self.layers, self.layers2, self.layers3):
-            x = l3(l2(l(x)))
-        x = F.adaptive_max_pool2d(x, 1)
-        x = x.view(x.size(0), -1)
-        return self.out(x)
-
-
 def main():
     root = Path.home() / 'data' / 'cifar10'
 
@@ -351,21 +295,14 @@ def main():
             shuffle=training, num_workers=0)
         dataset_sizes[name] = len(dataset)
 
-    # model = ResNet()
-    # model = ConvNet([10, 20, 40, 80, 160], 10)
-    # model = CustomResNet()
-    # model = FastAIResNet([10, 20, 40, 80, 160], 10)
-
-    model = FastAIResNet([10, 20, 40, 80, 160], 10)
-    # model = CustomResNet()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-6)
-
     n = len(datasets['train'])
-    # optimizer = optim.SGD(
-    #     model.parameters(), momentum=0.9, weight_decay=1e-5, lr=1e-2)
 
+    # model = FastAIResNet([10, 20, 40, 80, 160], 10)
+    model = CustomResNet()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-6)
     schedule = CosineAnnealingLR(optimizer, t_max=n, eta_min=1e-5, cycle_mult=2)
     loop = Loop(model, optimizer, schedule, device=DEVICE)
+
     callbacks = [
         History(), CSVLogger(), Logger(),
         EarlyStopping(patience=3), Checkpoint()]
@@ -376,7 +313,17 @@ def main():
         callbacks=callbacks,
         loss_fn=F.cross_entropy,
         metrics=[accuracy],
-        epochs=5)
+        epochs=1)
+
+    dataset = datasets['valid']
+    loader = DataLoader(dataset=dataset, batch_size=8, shuffle=True)
+    x, y = next(iter(loader))
+    state = torch.load(loop['Checkpoint'].best_model)
+    model.load_state_dict(state)
+    predictions = model(x.cuda())
+    labels = predictions.argmax(dim=1)
+    verbose = [dataset.classes[name] for name in labels]
+    imshow(utils.make_grid(x), title=verbose)
 
 
 if __name__ == '__main__':
