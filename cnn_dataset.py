@@ -14,7 +14,6 @@ from torchvision.datasets import ImageFolder
 
 from core.loop import Loop
 from core.schedule import CosineAnnealingLR
-from core.utils import LabelledImagesDataset
 from core.callbacks import (
     Logger, History, EarlyStopping, CSVLogger, Checkpoint)
 
@@ -22,93 +21,6 @@ from core.callbacks import (
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 MEAN = np.array([0.4914, 0.48216, 0.44653])
 STD = np.array([0.24703, 0.24349, 0.26159])
-
-
-# class ConvLayer(nn.Module):
-#
-#     def __init__(self, ni, nf, stride=2, kernel_size=3):
-#         super().__init__()
-#         self.conv = nn.Conv2d(
-#             in_channels=ni, out_channels=nf,
-#             kernel_size=kernel_size, stride=stride,
-#             bias=False, padding=1)
-#         self.bn = nn.BatchNorm2d(nf)
-#
-#     def forward(self, x):
-#         return F.leaky_relu(self.bn(self.conv(x)))
-#
-#
-# class ResNetLayer(ConvLayer):
-#
-#     def forward(self, x):
-#         return x + super().forward(x)
-#
-#
-# class FastAIResNet(nn.Module):
-#
-#     def __init__(self, layers, num_of_classes):
-#         super().__init__()
-#         self.conv = nn.Conv2d(3, 10, kernel_size=5, stride=1, padding=2)
-#         self.layers1 = nn.ModuleList([
-#             ConvLayer(x, y) for (x, y) in pairs(layers)])
-#         self.layers2 = nn.ModuleList([
-#             ResNetLayer(x, x, 1) for x in layers[1:]])
-#         self.layers3 = nn.ModuleList([
-#             ResNetLayer(x, x, 1) for x in layers[1:]])
-#         self.fc = nn.Linear(layers[-1], num_of_classes)
-#
-#     def forward(self, x):
-#         x = self.conv(x)
-#         for l1, l2, l3 in zip(self.layers1, self.layers2, self.layers3):
-#             x = l3(l2(l1(x)))
-#         x = F.adaptive_max_pool2d(x, 1)
-#         x = x.view(x.size(0), -1)
-#         x = self.fc(x)
-#         return F.log_softmax(x, dim=-1)
-
-
-def pairs(xs):
-    current, *rest = xs
-    for item in rest:
-        yield current, item
-        current = item
-
-
-def imshow(image, title=None):
-    img = image.numpy().transpose((1, 2, 0))
-    img = STD*img + MEAN
-    img = np.clip(img, 0, 1)
-    plt.imshow(img)
-    if title is not None:
-        plt.title(title)
-    plt.pause(0.001)
-
-
-def accuracy(y_pred, y_true):
-    match = y_pred.argmax(dim=1) == y_true
-    acc = match.type(torch.float).mean()
-    return acc.item()
-
-
-class ConvNet(nn.Module):
-
-    def __init__(self, layers, c):
-        super().__init__()
-        self.conv = nn.Conv2d(3, 10, kernel_size=5, stride=1, padding=2)
-        self.layers = nn.ModuleList([
-            nn.Conv2d(layers[i], layers[i + 1], kernel_size=3, stride=2)
-            for i in range(len(layers) - 1)])
-        self.pool = nn.AdaptiveMaxPool2d(1)
-        self.out = nn.Linear(layers[-1], c)
-
-    def forward(self, x):
-        x = self.conv(x)
-        for l in self.layers:
-            x = F.relu(l(x))
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.out(x)
-        return x
 
 
 def conv3x3(ni, nf, stride=1, padding=1):
@@ -151,47 +63,6 @@ class IdentityBlock(nn.Module):
         return out
 
 
-class ResNet(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-        self.conv = nn.Conv2d(3, 16, kernel_size=5, stride=1, padding=2)
-
-        self.block1 = nn.Sequential(
-            IdentityBlock(16),
-            IdentityBlock(16),
-            IdentityBlock(16)
-        )
-
-        self.block2 = nn.Sequential(
-            IdentityBlock(16, 32, stride=2),
-            IdentityBlock(32),
-            IdentityBlock(32),
-            IdentityBlock(32)
-        )
-
-        self.block3 = nn.Sequential(
-            IdentityBlock(32, 64, stride=2),
-            IdentityBlock(64),
-            IdentityBlock(64),
-            IdentityBlock(64),
-            IdentityBlock(64)
-        )
-
-        self.fc = nn.Linear(64, 10)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.block1(x)
-        x = self.block2(x)
-        x = self.block3(x)
-        x = F.adaptive_avg_pool2d(x, 1)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
-
-
 class CustomResNet(nn.Module):
 
     def __init__(self):
@@ -225,48 +96,27 @@ class CustomResNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-class ConvLayer(nn.Module):
-
-    def __init__(self, ni, nf, stride=2, kernel_size=3):
-        super().__init__()
-        self.conv = nn.Conv2d(
-            ni, nf, kernel_size=kernel_size,
-            stride=stride, bias=False, padding=1)
-        self.bn = nn.BatchNorm2d(nf)
-        self.relu = nn.LeakyReLU(inplace=True)
-
-    def forward(self, x):
-        return self.relu(self.bn(self.conv(x)))
+def pairs(xs):
+    current, *rest = xs
+    for item in rest:
+        yield current, item
+        current = item
 
 
-class ResNetLayer(ConvLayer):
+def imshow(image, title=None):
+    img = image.numpy().transpose((1, 2, 0))
+    img = STD*img + MEAN
+    img = np.clip(img, 0, 1)
+    plt.imshow(img)
+    if title is not None:
+        plt.title(title)
+    plt.pause(0.001)
 
-    def forward(self, x):
-        return x + super().forward(x)
 
-
-class FastAIResNet(nn.Module):
-
-    def __init__(self, layers, num_of_classes):
-        super().__init__()
-        self.conv = nn.Conv2d(3, 10, kernel_size=5, stride=1, padding=2)
-        self.blocks = nn.ModuleList([
-            nn.Sequential(
-                ConvLayer(x, y),
-                ResNetLayer(y, y, stride=1),
-                ResNetLayer(y, y, stride=1))
-            for x, y in pairs(layers)])
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(layers[-1], num_of_classes)
-
-    def forward(self, x):
-        x = self.conv(x)
-        for block in self.blocks:
-            x = block(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
+def accuracy(y_pred, y_true):
+    match = y_pred.argmax(dim=1) == y_true
+    acc = match.type(torch.float).mean()
+    return acc.item()
 
 
 def main():
@@ -292,20 +142,19 @@ def main():
         datasets[name] = dataset
         loaders[name] = DataLoader(
             dataset=dataset, batch_size=256,
-            shuffle=training, num_workers=0)
+            shuffle=training, num_workers=cpu_count())
         dataset_sizes[name] = len(dataset)
 
     n = len(datasets['train'])
 
-    # model = FastAIResNet([10, 20, 40, 80, 160], 10)
     model = CustomResNet()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-6)
+    optimizer = optim.Adam(model.parameters(), lr=1e-2, weight_decay=1e-5)
     schedule = CosineAnnealingLR(optimizer, t_max=n, eta_min=1e-5, cycle_mult=2)
     loop = Loop(model, optimizer, schedule, device=DEVICE)
 
     callbacks = [
         History(), CSVLogger(), Logger(),
-        EarlyStopping(patience=3), Checkpoint()]
+        EarlyStopping(patience=50), Checkpoint()]
 
     loop.run(
         train_data=loaders['train'],
@@ -313,7 +162,7 @@ def main():
         callbacks=callbacks,
         loss_fn=F.cross_entropy,
         metrics=[accuracy],
-        epochs=1)
+        epochs=150)
 
     dataset = datasets['valid']
     loader = DataLoader(dataset=dataset, batch_size=8, shuffle=True)
