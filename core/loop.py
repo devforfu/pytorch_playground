@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import torch
 from torch.nn import functional as F
 
@@ -50,26 +52,25 @@ class Loop:
         self.callbacks = cb
         self.stepper = self.make_stepper(loss_fn, metrics)
 
-        a = self.alpha
         for epoch in range(epochs):
             if self.stop:
                 break
+            metrics = {}
+            cb.epoch_start(epoch)
             for phase in phases:
-                cb.epoch_start(epoch, phase)
+                # cb.epoch_start(epoch, phase)
                 is_training = phase.name == 'train'
                 for batch in phase.dataset:
                     x, y = [tensor.to(self.device) for tensor in batch]
                     phase.batch_num += 1
                     cb.batch_start(epoch, phase)
                     batch_metrics = self.stepper.step(x, y, is_training)
-                    loss = batch_metrics['loss']
-                    avg_loss = a*phase.avg_loss + (1 - a)*loss
-                    debias_loss = avg_loss/(1 - a**phase.batch_num)
-                    batch_metrics['loss'] = debias_loss
-                    phase.avg_loss = avg_loss
-                    phase.metrics = batch_metrics
+                    self.update_metrics(phase, batch_metrics)
                     cb.batch_end(epoch, phase)
-                cb.epoch_end(epoch, phase)
+                metrics.update({
+                    f'{phase.name}_{k}': v
+                    for k, v in phase.metrics.items()})
+            cb.epoch_end(epoch, metrics)
         cb.training_end()
 
     def make_stepper(self, loss_fn, metrics=None, stepper=None):
@@ -80,6 +81,17 @@ class Loop:
 
     def save_model(self, path):
         self.stepper.save_model(path)
+
+    def update_metrics(self, phase, batch_metrics):
+        a = self.alpha
+        updated = {}
+        for name, new_value in batch_metrics.items():
+            old_value = phase.rolling_metrics[name]
+            avg_value = a*old_value + (1 - a)*new_value
+            debias_value = avg_value/(1 - a**phase.batch_num)
+            updated[name] = debias_value
+            phase.rolling_metrics[name] = avg_value
+        phase.metrics = updated
 
     @property
     def lr_schedule(self):
@@ -102,11 +114,16 @@ class Phase:
         self.name = name
         self.dataset = dataset
         self.batch_num = 0
-        self.avg_loss = 0.0
+        self.rolling_metrics = defaultdict(lambda: 0)
         self.metrics = None
 
     def __repr__(self):
-        return f'<Phase: {self.name}, avg_loss: {self.avg_loss:2.4f}>'
+        if self.metrics is None:
+            return f'<Phase: {self.name}, metrics: none>'
+        metrics = ', '.join([
+            f'{key}={value:2.4f}'
+            for key, value in self.metrics.items()])
+        return f'<Phase: {self.name}, metrics: {metrics}>'
 
 
 class Stepper:
@@ -142,6 +159,7 @@ class Stepper:
 
         """
         metrics = {}
+        self.model.train(train)
 
         with torch.set_grad_enabled(train):
             out = self.model(x)

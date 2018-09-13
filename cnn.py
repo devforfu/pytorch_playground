@@ -33,9 +33,9 @@ class ConvNet(nn.Module):
         return F.log_softmax(x, dim=-1)
 
 
-def conv3x3(ni, nf, stride=1):
-    return nn.Conv2d(ni, nf, kernel_size=3, stride=stride,
-                     padding=1, bias=False)
+def conv3x3(ni, nf, stride=1, padding=1):
+    return nn.Conv2d(ni, nf, kernel_size=3, stride=stride, padding=padding,
+                     bias=False)
 
 
 class IdentityBlock(nn.Module):

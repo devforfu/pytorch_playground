@@ -17,10 +17,10 @@ class Callback:
     def training_end(self):
         pass
 
-    def epoch_start(self, epoch, phase):
+    def epoch_start(self, epoch):
         pass
 
-    def epoch_end(self, epoch, phase):
+    def epoch_end(self, epoch, metrics):
         pass
 
     def batch_start(self, epoch, phase):
@@ -46,11 +46,11 @@ class CallbackGroup(Callback):
     def training_end(self):
         for cb in self.callbacks: cb.training_end()
 
-    def epoch_start(self, epoch, phase):
-        for cb in self.callbacks: cb.epoch_start(epoch, phase)
+    def epoch_start(self, epoch):
+        for cb in self.callbacks: cb.epoch_start(epoch)
 
-    def epoch_end(self, epoch, phase):
-        for cb in self.callbacks: cb.epoch_end(epoch, phase)
+    def epoch_end(self, epoch, metrics):
+        for cb in self.callbacks: cb.epoch_end(epoch, metrics)
 
     def batch_start(self, epoch, phase):
         for cb in self.callbacks: cb.batch_start(epoch, phase)
@@ -82,21 +82,13 @@ class Logger(Callback):
         self.epoch_history = {}
         self.curr_epoch = 0
 
-    def epoch_end(self, epoch, phase):
-        if epoch % self.log_every != 0:
-            return
-        if self.curr_epoch != epoch:
-            all_metrics = []
-            for phase_name, metrics in self.epoch_history.items():
-                for name, value in metrics.items():
-                    all_metrics.append(f'{phase_name} {name}: {value:2.4f}')
-            metrics = ' - '.join(all_metrics)
-            string = f'Epoch {epoch:4d} | {metrics}\n'
-            for stream in self.streams:
-                stream.write(string)
-                stream.flush()
-            self.curr_epoch = epoch
-        self.epoch_history[phase.name] = phase.metrics
+    def epoch_end(self, epoch, metrics):
+        stats = [f'{name}: {value:2.4f}' for name, value in metrics.items()]
+        metrics = ' - '.join(stats)
+        string = f'Epoch {epoch:4d} | {metrics}\n'
+        for stream in self.streams:
+            stream.write(string)
+            stream.flush()
 
 
 class CSVLogger(Logger):
@@ -125,14 +117,18 @@ class CSVLogger(Logger):
 class History(Callback):
 
     def __init__(self):
-        from collections import defaultdict
-        self.history = defaultdict(dict)
+        self.history = []
 
-    def epoch_end(self, epoch, phase):
-        self.history[epoch][phase.name] = phase.avg_loss
+    def epoch_end(self, epoch, metrics):
+        self.history.append(metrics)
 
     def training_end(self):
-        self.history = dict(self.history)
+        history = []
+        for i, record in enumerate(self.history):
+            item = record.copy()
+            item['epoch'] = i
+            history.append(item)
+        self.history = history
 
 
 class ImprovementTracker(Callback):
@@ -140,11 +136,12 @@ class ImprovementTracker(Callback):
     Tracks a specific metric during training process and reports when the
     metric does not improve after the predefined number of iterations.
     """
-    def __init__(self, patience=1, phase='valid', metric='avg_loss',
-                 better=min):
+    # def __init__(self, patience=1, phase='valid', metric='valid_avg_loss',
+    #              better=min):
 
+    def __init__(self, patience=1, metric='valid_loss', better=min):
         self.patience = patience
-        self.phase = phase
+        # self.phase = phase
         self.metric = metric
         self.better = better
         self.no_improvement = None
@@ -156,12 +153,8 @@ class ImprovementTracker(Callback):
         self.no_improvement = 0
         self.stagnation = False
 
-    def epoch_end(self, epoch, phase):
-        if phase.name != self.phase:
-            return
-        value = getattr(phase, self.metric)
-        if not value:
-            return
+    def epoch_end(self, epoch, metrics):
+        value = metrics[self.metric]
         best_value = self.best_value or value
         improved = self.better(best_value, value) == value
         if not improved:
@@ -183,8 +176,8 @@ class EarlyStopping(ImprovementTracker):
     improve during predefined number of iterations.
     """
 
-    def epoch_end(self, epoch, phase):
-        super().epoch_end(epoch, phase)
+    def epoch_end(self, epoch, metrics):
+        super().epoch_end(epoch, metrics)
         if self.stagnation:
             self.loop.stop = True
 
@@ -195,7 +188,7 @@ class Checkpoint(ImprovementTracker):
     is improved, or on each iteration if required.
     """
     def __init__(self, folder=None, save_best_only=True,
-                 filename='model_{phase}_{metric}_{value:2.4f}.weights',
+                 filename='model_{metric}_{value:2.4f}.weights',
                  **kwargs):
 
         super().__init__(**kwargs)
@@ -211,16 +204,10 @@ class Checkpoint(ImprovementTracker):
         return self.improved
 
     def get_name(self):
-        return self.filename.format(
-            phase=self.phase,
-            metric=self.metric,
-            value=self.best_value
-        )
+        return self.filename.format(metric=self.metric, value=self.best_value)
 
-    def epoch_end(self, epoch, phase):
-        if self.phase != phase.name:
-            return
-        super().epoch_end(epoch, phase)
+    def epoch_end(self, epoch, metrics):
+        super().epoch_end(epoch, metrics)
         if self.need_to_save:
             best_model = join(self.folder, self.get_name())
             self.loop.save_model(best_model)
