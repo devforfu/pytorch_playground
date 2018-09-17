@@ -1,5 +1,8 @@
+from os.path import exists, isdir
+from urllib.request import urlopen
 from collections import defaultdict
 
+import cv2 as cv
 import numpy as np
 
 
@@ -42,3 +45,36 @@ def to_voc(bbox):
     top, left, bottom, right = bbox
     new_box = [left, top, right - left + 1, bottom - top + 1]
     return np.array(new_box)
+
+
+def open_image(path):
+    """
+    Opens an image using OpenCV given the file path.
+
+    Args:
+         path: A local file path or URL of the image.
+
+    Return:
+        image: The image in RGB format normalized to range between 0.0 - 1.0
+
+    """
+    flags = cv.IMREAD_UNCHANGED + cv.IMREAD_ANYDEPTH + cv.IMREAD_ANYCOLOR
+    is_url = str(path).startswith('http')
+    if not exists(path) and not is_url:
+        raise OSError(f'No such file or directory: {path}')
+    elif isdir(path) and not is_url:
+        raise OSError(f'Is a directory: {path}')
+    else:
+        try:
+            if is_url:
+                r = urlopen(str(path))
+                arr = np.asarray(bytearray(r.read()), dtype='uint8')
+                image = cv.imdecode(arr, flags)
+            else:
+                image = cv.imread(str(path), flags)
+            image = image.astype(np.float32)/255
+            if image is None:
+                raise OSError(f'File is not recognized by OpenCV: {path}')
+            return cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        except Exception as e:
+            raise OSError(f'Error handling image at: {path}') from e
