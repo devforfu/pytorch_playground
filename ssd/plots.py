@@ -124,4 +124,3 @@ def add_outline(obj, lw=4):
         patheffects.Stroke(linewidth=lw, foreground='black'),
         patheffects.Normal()]
     obj.set_path_effects(effects)
-
