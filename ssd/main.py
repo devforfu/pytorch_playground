@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from itertools import chain
+from itertools import chain, islice
+from multiprocessing import cpu_count
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -12,6 +13,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import BatchSampler, SequentialSampler, RandomSampler
+from torchvision import transforms
 
 from utils import open_image
 
@@ -23,9 +25,11 @@ TRAIN_JPEG = ROOT.joinpath('VOCdevkit', 'VOC2007', 'JPEGImages')
 
 class VOCDataset(Dataset):
 
-    def __init__(self, json_path, images_path):
+    def __init__(self, json_path, images_path, size=224, augmentations=None):
         self.json_path = json_path
         self.images_path = images_path
+        self.size = size
+        self.transform = build_transform(augmentations)
         self.id2cat = None
         self.cat2id = None
         self._dataset = None
@@ -49,43 +53,52 @@ class VOCDataset(Dataset):
 
         dataset = df.loc[df.ignore != 1].reset_index(drop=True)
         categories = df.category_name.unique()
-        id2cat = {i: c for i, c in enumerate(categories)}
-        cat2id = {c: i for i, c in enumerate(categories)}
+        id2cat = {i: c for i, c in enumerate(categories, 1)}
+        cat2id = {c: i for i, c in enumerate(categories, 1)}
 
-        boxes, classes = [], []
-        for name, group in dataset.groupby('file_name'):
-            boxes.append(list(chain.from_iterable(group.bbox)))
-            classes.append([cat2id[name] for name in group.category_name])
-
-        longest_box = len(max(boxes, key=len))
-        boxes_padded = [
-            [0 for _ in range(longest_box - len(vec))] + vec
-            for vec in boxes]
-
-        longest_target = len(max(classes, key=len))
-        classes_padded = [
-            [0 for _ in range(longest_target - len(vec))] + vec
-            for vec in classes]
+        samples = []
+        for file_name, group in dataset.groupby('file_name'):
+            boxes = list(chain.from_iterable(group.bbox))
+            classes = [cat2id[name] for name in group.category_name]
+            samples.append((file_name, boxes, classes))
+        df = pd.DataFrame(samples, columns=['file_name', 'boxes', 'classes'])
 
         self.id2cat = id2cat
         self.cat2id = cat2id
-        self._dataset = dataset
+        self._dataset = df
 
     def __getitem__(self, index):
-        record = self._dataset.loc[index]
-        image = open_image(self.images_path / record.file_name)
-        box = np.array(record.bbox)
-        category_index = self.cat2id[record.category_name]
-        return image, box, category_index
+        """
+        Note that index could be a single integer, or a batch of indexes.
+        """
+        records = list(self._dataset.loc[index].itertuples())
+        np_images = [self.open(r.file_name) for r in records]
+        images = [self.transform(image) for image in np_images]
+        boxes, classes = list(zip(*[(r.boxes, r.classes) for r in records]))
+        boxes, classes = pad(boxes), pad(classes)
+        return torch.stack(images), t(boxes), t(classes)
 
     def __len__(self):
         return len(self._dataset)
+
+    def open(self, file_name):
+        return open_image(self.images_path / file_name, self.size)
+
+
+def t(obj):
+    return torch.tensor(obj)
+
+
+def build_transform(augmentations=None):
+    transforms_list = augmentations or []
+    transforms_list.append(transforms.ToTensor())
+    return transforms.Compose(transforms_list)
 
 
 class VOCDataLoader:
 
     def __init__(self, dataset, batch_size=1, shuffle=False, drop_last=False,
-                 num_workers=0):
+                 num_workers=0, transforms=None):
 
         self.dataset = dataset
         self.batch_size = batch_size
@@ -94,41 +107,43 @@ class VOCDataLoader:
         self.num_workers = num_workers
         self.batch_sampler = self._get_sampler()
 
+    def __len__(self):
+        return len(self.batch_sampler)
+
+    def __iter__(self):
+        iterator = iter(self.batch_sampler)
+        if self.num_workers > 0:
+            n = self.num_workers * 10
+            chunks = islice(iterator, 0, n)
+            with ThreadPoolExecutor(self.num_workers) as executor:
+                yield from executor.map(self._get_batch, chunks)
+        else:
+            for indexes in iterator:
+                yield self._get_batch(indexes)
+
     def _get_sampler(self):
         sampler_class = RandomSampler if self.shuffle else SequentialSampler
         sampler = sampler_class(self.dataset)
         batch_sampler = BatchSampler(sampler, self.batch_size, self.drop_last)
         return batch_sampler
 
-    def __len__(self):
-        return len(self.batch_sampler)
+    def _get_batch(self, indexes):
+        return self.dataset[indexes]
 
-    def __iter__(self):
 
-        def get_batch(indexes):
-            arr = self.dataset[indexes]
-            return torch.tensor(arr)
-
-        iterator = iter(self.batch_sampler)
-        if self.num_workers > 0:
-            with ThreadPoolExecutor(self.num_workers) as executor:
-                for indexes in iterator:
-                    yield from executor.map(get_batch, indexes)
-        else:
-            for indexes in iterator:
-                batch = get_batch(indexes)
-                yield batch
+def pad(arr, pad_value=0):
+    longest = len(max(arr, key=len))
+    return [
+        [pad_value for _ in range(longest - len(vec))] + vec
+        for vec in arr]
 
 
 def main():
     dataset = VOCDataset(TRAIN_JSON, TRAIN_JPEG)
-    loader = VOCDataLoader(dataset, batch_size=4)
+    loader = VOCDataLoader(dataset, batch_size=4, num_workers=cpu_count())
     for batch in iter(loader):
-        print(batch)
+        print(batch[2])
 
-    # with open(TRAIN_JSON) as file:
-    #     train_json = json.load(file)
-    # print(train_json)
 
 
 if __name__ == '__main__':

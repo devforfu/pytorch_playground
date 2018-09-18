@@ -47,12 +47,14 @@ def to_voc(bbox):
     return np.array(new_box)
 
 
-def open_image(path):
+def open_image(path, size=None):
     """
     Opens an image using OpenCV given the file path.
 
     Args:
          path: A local file path or URL of the image.
+         size: An optional tuple or integer with the size used to rescale the
+            read image. The image is rescaled without keeping aspect ratio.
 
     Return:
         image: The image in RGB format normalized to range between 0.0 - 1.0
@@ -75,6 +77,10 @@ def open_image(path):
             image = image.astype(np.float32)/255
             if image is None:
                 raise OSError(f'File is not recognized by OpenCV: {path}')
-            return cv.cvtColor(image, cv.COLOR_BGR2RGB)
         except Exception as e:
             raise OSError(f'Error handling image at: {path}') from e
+    rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+    if size is not None:
+        size = (size, size) if isinstance(size, int) else tuple(size)
+        return cv.resize(rgb, size)
+    return rgb
