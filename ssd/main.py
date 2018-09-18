@@ -15,21 +15,26 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import BatchSampler, SequentialSampler, RandomSampler
 from torchvision import transforms
 
-from utils import open_image
+from plots import VOCPlotter
+from utils import open_image, from_voc, read_sample
 
 
 ROOT = Path.home().joinpath('data', 'voc2007')
 TRAIN_JSON = ROOT / 'pascal_train2007.json'
 TRAIN_JPEG = ROOT.joinpath('VOCdevkit', 'VOC2007', 'JPEGImages')
+DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
 class VOCDataset(Dataset):
 
-    def __init__(self, json_path, images_path, size=224, augmentations=None):
+    def __init__(self, json_path, images_path, size=224, augmentations=None,
+                 device=DEVICE):
+
         self.json_path = json_path
         self.images_path = images_path
         self.size = size
         self.transform = build_transform(augmentations)
+        self.device = device
         self.id2cat = None
         self.cat2id = None
         self._dataset = None
@@ -52,6 +57,7 @@ class VOCDataset(Dataset):
         ).rename(columns={'name': 'category_name'})
 
         dataset = df.loc[df.ignore != 1].reset_index(drop=True)
+        dataset['bbox'] = dataset.bbox.map(from_voc)
         categories = df.category_name.unique()
         id2cat = {i: c for i, c in enumerate(categories, 1)}
         cat2id = {c: i for i, c in enumerate(categories, 1)}
@@ -61,7 +67,10 @@ class VOCDataset(Dataset):
             boxes = list(chain.from_iterable(group.bbox))
             classes = [cat2id[name] for name in group.category_name]
             samples.append((file_name, boxes, classes))
+
         df = pd.DataFrame(samples, columns=['file_name', 'boxes', 'classes'])
+        df['boxes'] = df.boxes.map(np.array)
+        df['classes'] = df.classes.map(np.array)
 
         self.id2cat = id2cat
         self.cat2id = cat2id
@@ -71,22 +80,29 @@ class VOCDataset(Dataset):
         """
         Note that index could be a single integer, or a batch of indexes.
         """
-        records = list(self._dataset.loc[index].itertuples())
-        np_images = [self.open(r.file_name) for r in records]
-        images = [self.transform(image) for image in np_images]
-        boxes, classes = list(zip(*[(r.boxes, r.classes) for r in records]))
-        boxes, classes = pad(boxes), pad(classes)
-        return torch.stack(images), t(boxes), t(classes)
+        batch = self._dataset.loc[index]
+        images, boxes = [], []
+        for sample in batch.itertuples():
+            path = self.images_path / sample.file_name
+            np_image, box = read_sample(path, sample.boxes, size=self.size)
+            images.append(self.transform(np_image))
+            boxes.append(box)
+
+        boxes = pad(boxes)
+        classes = pad(batch.classes.values)
+        tensors = [torch.stack(images), t(boxes), t(classes)]
+        return [tensor.to(self.device) for tensor in tensors]
 
     def __len__(self):
         return len(self._dataset)
 
-    def open(self, file_name):
-        return open_image(self.images_path / file_name, self.size)
-
 
 def t(obj):
     return torch.tensor(obj)
+
+
+def to_np(*tensors):
+    return [tensor.cpu().numpy() for tensor in tensors]
 
 
 def build_transform(augmentations=None):
@@ -98,7 +114,7 @@ def build_transform(augmentations=None):
 class VOCDataLoader:
 
     def __init__(self, dataset, batch_size=1, shuffle=False, drop_last=False,
-                 num_workers=0, transforms=None):
+                 num_workers=0):
 
         self.dataset = dataset
         self.batch_size = batch_size
@@ -133,17 +149,23 @@ class VOCDataLoader:
 
 def pad(arr, pad_value=0):
     longest = len(max(arr, key=len))
-    return [
-        [pad_value for _ in range(longest - len(vec))] + vec
-        for vec in arr]
+    padded = np.zeros((len(arr), longest), dtype=arr[0].dtype)
+    for row, vec in enumerate(arr):
+        n = len(vec)
+        for i in range(longest):
+            col = longest - i - 1
+            padded[row, col] = pad_value if i >= n else vec[n - i - 1]
+    return padded
 
 
 def main():
     dataset = VOCDataset(TRAIN_JSON, TRAIN_JPEG)
-    loader = VOCDataLoader(dataset, batch_size=4, num_workers=cpu_count())
-    for batch in iter(loader):
-        print(batch[2])
+    loader = VOCDataLoader(dataset, batch_size=12, num_workers=0)
+    plotter = VOCPlotter(id2cat=dataset.id2cat, figsize=(12, 10))
 
+    for batch in iter(loader):
+        with plotter:
+            plotter.plot_boxes(*to_np(*batch))
 
 
 if __name__ == '__main__':

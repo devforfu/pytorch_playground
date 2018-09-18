@@ -32,7 +32,7 @@ def from_voc(bbox):
     """
     x, y, w, h = bbox
     new_box = [y, x, y + h - 1, x + w - 1]
-    return np.array(new_box)
+    return new_box
 
 
 def to_voc(bbox):
@@ -44,17 +44,15 @@ def to_voc(bbox):
     """
     top, left, bottom, right = bbox
     new_box = [left, top, right - left + 1, bottom - top + 1]
-    return np.array(new_box)
+    return new_box
 
 
-def open_image(path, size=None):
+def open_image(path):
     """
     Opens an image using OpenCV given the file path.
 
     Args:
          path: A local file path or URL of the image.
-         size: An optional tuple or integer with the size used to rescale the
-            read image. The image is rescaled without keeping aspect ratio.
 
     Return:
         image: The image in RGB format normalized to range between 0.0 - 1.0
@@ -79,8 +77,43 @@ def open_image(path, size=None):
                 raise OSError(f'File is not recognized by OpenCV: {path}')
         except Exception as e:
             raise OSError(f'Error handling image at: {path}') from e
-    rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+    return cv.cvtColor(image, cv.COLOR_BGR2RGB)
+
+
+def read_sample(path, boxes, size=None):
+    """
+    Args:
+        path: A local file path or URL of the image.
+        boxes: An array with bounding boxes.
+        size: An optional tuple or integer with the size used to rescale the
+            read image. The image is rescaled without keeping aspect ratio.
+
+    """
+    image = open_image(path)
+    old_size = image.shape[:2]
     if size is not None:
         size = (size, size) if isinstance(size, int) else tuple(size)
-        return cv.resize(rgb, size)
-    return rgb
+        image = cv.resize(image, size)
+    new_size = image.shape[:2]
+    if old_size != new_size:
+        old_boxes = np.array(boxes)
+        new_boxes = np.zeros_like(old_boxes)
+        for i, box in enumerate(old_boxes.reshape(-1, 4)):
+            box = resize_box(box, old_size, new_size)
+            new_boxes[i*4:(i + 1)*4] = box
+        boxes = new_boxes
+    return image, boxes
+
+
+def resize_box(box, old_size, new_size):
+    y1, x1, y2, x2 = box
+    old_h, old_w = old_size
+    new_h, new_w = new_size
+    h_ratio = new_h / float(old_h)
+    w_ratio = new_w / float(old_w)
+    new_box = [y1*h_ratio, x1*w_ratio, y2*h_ratio, x2*w_ratio]
+    return new_box
+
+
+def valid_box(vec):
+    return np.count_nonzero(vec) >= 2
