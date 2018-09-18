@@ -2,6 +2,7 @@ from os.path import exists, isdir
 from urllib.request import urlopen
 from collections import defaultdict
 
+import torch
 import cv2 as cv
 import numpy as np
 
@@ -115,5 +116,24 @@ def resize_box(box, old_size, new_size):
     return new_box
 
 
+def pad(arr, pad_value=0):
+    longest = len(max(arr, key=len))
+    padded = np.zeros((len(arr), longest), dtype=arr[0].dtype)
+    for row, vec in enumerate(arr):
+        n = len(vec)
+        for i in range(longest):
+            col = longest - i - 1
+            padded[row, col] = pad_value if i >= n else vec[n - i - 1]
+    return padded
+
+
 def valid_box(vec):
     return np.count_nonzero(vec) >= 2
+
+
+def t(obj):
+    return torch.tensor(obj)
+
+
+def to_np(*tensors):
+    return [tensor.cpu().numpy() for tensor in tensors]
