@@ -122,6 +122,7 @@ class VOCDataLoader:
         return self.dataset[indexes]
 
 
+
 def build_transform(augmentations=None):
     transforms_list = augmentations or []
     transforms_list.append(transforms.ToTensor())

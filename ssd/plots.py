@@ -37,7 +37,7 @@ class VOCPlotter:
             plt.close(self.fig)
 
         fig, axes = plt.subplots(*dims, **self.fig_kwargs)
-        n_colors = len(np.unique(classes))
+        n_colors = min(12, len(np.unique(classes)))
         cmap = get_cmap(n_colors)
         colors_list = [cmap(float(x)) for x in range(n_colors)]
 

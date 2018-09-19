@@ -18,11 +18,13 @@ class BinaryCrossEntropyLoss(nn.Module):
         t_target = one_hot[:, :-1].contiguous()
         t_input = predictions[:, :-1]
         xe = F.binary_cross_entropy_with_logits(
-            t_input, t_target, size_average=False)
+            t_input, t_target, reduction='sum')
         return xe / self.num_classes
 
     def one_hot_embedding(self, labels):
-        return torch.eye(self.num_classes)[labels.data.cpu()]
+        device = labels.device
+        matrix = torch.eye(self.num_classes + 1)[labels.data.cpu()]
+        return matrix.to(device)
 
 
 def ssd_loss(y_pred, y_true, anchors, grid_sizes, loss_f, n_classes, size=224):
@@ -32,7 +34,7 @@ def ssd_loss(y_pred, y_true, anchors, grid_sizes, loss_f, n_classes, size=224):
 
         boxes = boxes.view(-1, 4).float() / size
         index = (boxes[:, 2] - boxes[:, 0]) > 0
-        [keep] = index.nonzero()
+        keep = index.nonzero()[:, 0]
         return boxes[keep], classes[keep]
 
 

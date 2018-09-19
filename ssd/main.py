@@ -26,7 +26,7 @@ def main():
     dataset = VOCDataset(TRAIN_JSON, TRAIN_JPEG, device=DEVICE)
     loader = VOCDataLoader(dataset, batch_size=bs, num_workers=0)
     # plotter = VOCPlotter(id2cat=dataset.id2cat, figsize=(12, 10))
-
+    #
     # for images, (boxes, classes) in iter(loader):
     #     with plotter:
     #         plotter.plot_boxes(*to_np(images, boxes, classes))
@@ -48,7 +48,7 @@ def main():
     loss_fn = lambda x, y: ssd_loss(x, y, anchors, grid_sizes, bce_loss, n_classes)
 
     loop.run(
-        train_data=iter(loader),
+        train_data=loader,
         epochs=100,
         loss_fn=loss_fn,
         callbacks=[Logger()]
