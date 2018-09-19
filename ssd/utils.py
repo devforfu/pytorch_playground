@@ -137,3 +137,40 @@ def t(obj):
 
 def to_np(*tensors):
     return [tensor.cpu().numpy() for tensor in tensors]
+
+
+def hw2corners(centers, hw):
+    """Converts an array of rectangles from (cx, cy, height, width)
+    representations into (top, left, bottom, right) corners representation.
+    """
+    return torch.cat([centers - hw/2, centers + hw/2], dim=1)
+
+
+def jaccard(a, b):
+    intersection = intersect(a, b)
+    union = area(a).unsqueeze(1) + area(b).unsqueeze(0) - intersection
+    return intersection / union
+
+
+def intersect(a, b):
+    min_xy = torch.min(a[:, None, 2:], b[None, :, 2:])
+    max_xy = torch.max(a[:, None, :2], b[None, :, :2])
+    inter = torch.clamp((max_xy - min_xy), min=0)
+    return inter[:, :, 0] * inter[:, :, 1]
+
+
+def area(box):
+    h = box[:, 2] - box[:, 0]
+    w = box[:, 3] - box[:, 1]
+    return h * w
+
+
+def make_grid(anchors=4, k=1):
+    offset = 1/(anchors*2)
+    points = np.linspace(offset, 1 - offset, anchors)
+    anchors_x = np.repeat(points, anchors)
+    anchors_y = np.tile(points, anchors)
+    centers = np.stack([anchors_x, anchors_y], axis=1)
+    sizes = np.array([(1/anchors, 1/anchors) for _ in range(anchors*anchors)])
+    grid = np.c_[np.tile(centers, (k, 1)), np.tile(sizes, (k, 1))]
+    return grid

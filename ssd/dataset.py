@@ -21,8 +21,8 @@ class VOCDataset(Dataset):
         self.json_path = json_path
         self.images_path = images_path
         self.size = size
-        self.transform = build_transform(augmentations)
         self.device = device or 'cpu'
+        self.transform = build_transform(augmentations)
         self.id2cat = None
         self.cat2id = None
         self._dataset = None
@@ -78,8 +78,9 @@ class VOCDataset(Dataset):
 
         boxes = pad(boxes)
         classes = pad(batch.classes.values)
-        tensors = [torch.stack(images), t(boxes), t(classes)]
-        return [tensor.to(self.device) for tensor in tensors]
+        tensors = torch.stack(images), t(boxes), t(classes)
+        x, y1, y2 = [tensor.to(self.device) for tensor in tensors]
+        return x, (y1, y2)
 
     def __len__(self):
         return len(self._dataset)

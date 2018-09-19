@@ -1,10 +1,17 @@
+import math
 from pathlib import Path
 
 import torch
+from torch import optim
 
-from utils import to_np
+from utils import to_np, make_grid, hw2corners
 from plots import VOCPlotter
+from models import SSD
+from loss import ssd_loss, BinaryCrossEntropyLoss
 from dataset import VOCDataset, VOCDataLoader
+from core.loop import Loop
+from core.schedule import CosineAnnealingLR
+from core.callbacks import Logger
 
 
 ROOT = Path.home().joinpath('data', 'voc2007')
@@ -14,14 +21,36 @@ DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 
 def main():
+    bs = 64
     dataset = VOCDataset(TRAIN_JSON, TRAIN_JPEG, device=DEVICE)
-    loader = VOCDataLoader(dataset, batch_size=12, num_workers=0)
+    loader = VOCDataLoader(dataset, batch_size=bs, num_workers=0)
     plotter = VOCPlotter(id2cat=dataset.id2cat, figsize=(12, 10))
 
-    for batch in iter(loader):
+    for images, (boxes, classes) in iter(loader):
         with plotter:
-            plotter.plot_boxes(*to_np(*batch))
+            plotter.plot_boxes(*to_np(images, boxes, classes))
             break  # a single batch to verify everything works
+
+    n_classes = len(dataset.id2cat)
+    cycle_len = math.ceil(len(dataset)/bs)
+    model = SSD(n_classes=n_classes)
+    optimizer = optim.Adam(model.parameters(), lr=1e-2)
+    scheduler = CosineAnnealingLR(optimizer, t_max=cycle_len)
+    loop = Loop(model, optimizer, scheduler, device=DEVICE)
+
+    n_anchors = 4
+    anchors = torch.tensor(make_grid(n_anchors), requires_grad=False).float()
+    grid_sizes = torch.tensor([1/n_anchors], requires_grad=False).unsqueeze(1)
+    bce_loss = BinaryCrossEntropyLoss(n_classes)
+    loss_fn = lambda x, y: ssd_loss(x, y, anchors, grid_sizes, bce_loss)
+
+    loop.run(
+        train_data=iter(loader),
+        epochs=100,
+        loss_fn=loss_fn,
+        callbacks=[Logger()]
+    )
+
 
 
 if __name__ == '__main__':

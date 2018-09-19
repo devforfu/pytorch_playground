@@ -38,7 +38,6 @@ class Loop:
         self.stepper = None
         self.device = device
 
-
     def run(self, train_data, valid_data=None, loss_fn=F.nll_loss,
             epochs: int=100, callbacks=None, metrics=None):
 
@@ -60,8 +59,9 @@ class Loop:
             for phase in phases:
                 # cb.epoch_start(epoch, phase)
                 is_training = phase.name == 'train'
-                for batch in phase.dataset:
-                    x, y = [tensor.to(self.device) for tensor in batch]
+                for x, y in phase.dataset:
+                # for batch in phase.dataset:
+                    # x, y = [tensor.to(self.device) for tensor in batch]
                     phase.batch_num += 1
                     cb.batch_start(epoch, phase)
                     batch_metrics = self.stepper.step(x, y, is_training)
