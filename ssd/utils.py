@@ -131,8 +131,8 @@ def valid_box(vec):
     return np.count_nonzero(vec) >= 2
 
 
-def t(obj):
-    return torch.tensor(obj)
+def t(obj, **kwargs):
+    return torch.tensor(obj, **kwargs)
 
 
 def to_np(*tensors):
@@ -153,10 +153,10 @@ def jaccard(a, b):
 
 
 def intersect(a, b):
-    min_xy = torch.min(a[:, None, 2:], b[None, :, 2:])
-    max_xy = torch.max(a[:, None, :2], b[None, :, :2])
-    inter = torch.clamp((max_xy - min_xy), min=0)
-    return inter[:, :, 0] * inter[:, :, 1]
+    bottom_right = torch.min(a[:, None, 2:], b[None, :, 2:])
+    top_left = torch.max(a[:, None, :2], b[None, :, :2])
+    inter = torch.clamp((bottom_right - top_left), min=0)
+    return torch.prod(inter, dim=2)
 
 
 def area(box):

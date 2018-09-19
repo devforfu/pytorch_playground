@@ -25,21 +25,21 @@ class BinaryCrossEntropyLoss(nn.Module):
         return torch.eye(self.num_classes)[labels.data.cpu()]
 
 
-def ssd_loss(y_pred, y_true, anchors, grid_sizes, loss_f, size=224):
+def ssd_loss(y_pred, y_true, anchors, grid_sizes, loss_f, n_classes, size=224):
 
-    def filter_empty(boxes, classes):
+    def get_relevant(boxes, classes):
         """Drops samples with boxes of zero width."""
 
-        rescaled_boxes = boxes.view(-1, 4) / size
-        index = (rescaled_boxes[:, 2] - rescaled_boxes[:, 0]) > 0
+        boxes = boxes.view(-1, 4).float() / size
+        index = (boxes[:, 2] - boxes[:, 0]) > 0
         [keep] = index.nonzero()
-        return rescaled_boxes[keep], classes[keep]
+        return boxes[keep], classes[keep]
 
 
     def activations_to_boxes(activations):
         """Converts activation values of top layers into bounding boxes."""
 
-        tanh = F.tanh(activations)
+        tanh = torch.tanh(activations)
         centers = (tanh[:, :2]/2 * grid_sizes) + anchors[:, :2]
         hw = (tanh[:, 2:]/2 + 1) * anchors[:, 2:]
         return hw2corners(centers, hw)
@@ -56,18 +56,20 @@ def ssd_loss(y_pred, y_true, anchors, grid_sizes, loss_f, size=224):
         return gt_overlap, gt_index
 
 
-    box_loss, class_loss = 0, 0
     anchor_corners = hw2corners(anchors[:, :2], anchors[:, 2:])
 
-    for pred_box_act, pred_cls, true_box, true_cls in zip(*y_pred, *y_true):
-        boxes, classes = filter_empty(true_box, true_cls)
-        pred_boxes = activations_to_boxes(pred_box_act)
-        overlaps = jaccard(boxes.data, anchor_corners.data)
+    box_loss, class_loss = 0, 0
+    for pred_bb, pred_cls, true_bb, true_cls in zip(*y_pred, *y_true):
+        true_bb, true_cls = get_relevant(true_bb, true_cls)
+        activ_bb = activations_to_boxes(pred_bb)
+        overlaps = jaccard(true_bb.data, anchor_corners.data)
         gt_overlap, gt_index = map_to_ground_truth(overlaps)
-        gt_classes = true_cls[gt_index]
-        [positive] = np.nonzero(gt_overlap > 0.4)
-        gt_boxes = true_box[gt_index]
-        box_loss += (pred_boxes[positive] - gt_boxes[positive]).abs().mean()
-        class_loss += loss_f(pred_cls, gt_classes)
+        gt_class = true_cls[gt_index]
+        pos = gt_overlap > 0.4
+        pos_index = torch.nonzero(pos)[:, 0]
+        gt_class[1 - pos] = n_classes
+        gt_bb = true_bb[gt_index]
+        box_loss += (activ_bb[pos_index] - gt_bb[pos_index]).abs().mean()
+        class_loss += loss_f(pred_cls, gt_class)
 
     return box_loss + class_loss

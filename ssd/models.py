@@ -46,11 +46,14 @@ class SSD(nn.Module):
     Single-Shot Detector model.
     """
     def __init__(self, n_classes, dropout=0.25, bias=0, k=1,
-                 backbone=resnet34, pretrained=True):
+                 backbone=resnet34, pretrained=True, flatten=True):
 
         super().__init__()
         model = backbone(pretrained=pretrained)
         children = list(model.children())
+
+        self.k = k
+        self.flatten = flatten
         self.backbone = nn.Sequential(*children[:-2])
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout)
@@ -65,4 +68,12 @@ class SSD(nn.Module):
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.out(x)
+        if self.flatten:
+            x = [flatten_conv(obj, self.k) for obj in x]
         return x
+
+
+def flatten_conv(x, k):
+    bs, nf, gx, gy = x.size()
+    x = x.permute(0,2,3,1).contiguous()
+    return x.view(bs, -1, nf//k)
