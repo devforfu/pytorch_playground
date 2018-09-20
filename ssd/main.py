@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from torch import optim
 
-from utils import to_np, make_grid, hw2corners, t
+from misc import to_np, make_grid, hw2corners, t
 from plots import VOCPlotter
 from models import SSD
 from loss import ssd_loss, BinaryCrossEntropyLoss

@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from torch.utils.data import BatchSampler, SequentialSampler, RandomSampler
 from torchvision import transforms
 
-from utils import from_voc, read_sample, pad, t
+from misc import from_voc, read_sample, pad, t
 
 
 class VOCDataset(Dataset):

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib import patches, patheffects
 
-from utils import open_image, to_voc, valid_box
+from misc import open_image, to_voc, valid_box
 
 
 

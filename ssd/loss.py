@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from utils import hw2corners, jaccard
+from misc import hw2corners, jaccard
 
 
 class BinaryCrossEntropyLoss(nn.Module):
