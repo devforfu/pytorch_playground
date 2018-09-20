@@ -24,19 +24,21 @@ class Loop:
 
     """
     def __init__(self, model, optimizer, schedule, alpha: float=0.98,
-                 device=None):
+                 move_to_device=True, device=None):
 
-        device = torch.device(device or 'cpu')
-        model.to(device)
+        if move_to_device:
+            device = torch.device(device or 'cpu')
+            model = model.to(device)
+            self.device = device
 
         self.model = model
         self.optimizer = optimizer
         self.schedule = schedule
         self.alpha = alpha
+        self.move_to_device = move_to_device
         self.stop = False
         self.callbacks = None
         self.stepper = None
-        self.device = device
 
     def run(self, train_data, valid_data=None, loss_fn=F.nll_loss,
             epochs: int=100, callbacks=None, metrics=None):
@@ -57,11 +59,10 @@ class Loop:
             metrics = {}
             cb.epoch_start(epoch)
             for phase in phases:
-                # cb.epoch_start(epoch, phase)
+                cb.epoch_start(epoch)
                 is_training = phase.name == 'train'
-                for x, y in phase.dataset:
-                # for batch in phase.dataset:
-                    # x, y = [tensor.to(self.device) for tensor in batch]
+                for batch in phase.dataset:
+                    x, y = self._place_and_unwrap_if_needed(batch)
                     phase.batch_num += 1
                     cb.batch_start(epoch, phase)
                     batch_metrics = self.stepper.step(x, y, is_training)
@@ -96,6 +97,17 @@ class Loop:
     @property
     def lr_schedule(self):
         return self.stepper.learning_rates
+
+    def _place_and_unwrap_if_needed(self, batch):
+        x, *y = batch
+        if self.move_to_device:
+            x = x.to(self.device)
+            y = [tensor.to(self.device) for tensor in y]
+        else:
+            x, *y = batch
+        if len(y) == 1:
+            [y] = y
+        return x, y
 
     def __getitem__(self, item):
         return self.callbacks[item]
