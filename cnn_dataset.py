@@ -14,6 +14,7 @@ from torchvision.datasets import ImageFolder
 
 from core.loop import Loop
 from core.schedule import CosineAnnealingLR
+from core.metrics import accuracy
 from core.callbacks import (
     Logger, History, EarlyStopping, CSVLogger, Checkpoint)
 
@@ -112,11 +113,6 @@ def imshow(image, title=None):
         plt.title(title)
     plt.pause(0.001)
 
-
-def accuracy(y_pred, y_true):
-    match = y_pred.argmax(dim=1) == y_true
-    acc = match.type(torch.float).mean()
-    return acc.item()
 
 
 def main():

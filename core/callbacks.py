@@ -212,3 +212,15 @@ class Checkpoint(ImprovementTracker):
             best_model = join(self.folder, self.get_name())
             self.loop.save_model(best_model)
             self.best_model = best_model
+
+
+def default_callbacks(workdir=None):
+    """Returns a list with commonly used callbacks."""
+
+    workdir = workdir or os.getcwd()
+    return [
+        History(),
+        Logger(),
+        CSVLogger(filename=join(workdir, 'history.csv')),
+        Checkpoint(folder=workdir)
+    ]
