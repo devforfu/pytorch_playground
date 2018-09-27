@@ -1,0 +1,2 @@
+Epoch    0 | train_loss: 0.2037 - train_accuracy: 0.9466 - valid_loss: 0.0987 - valid_accuracy: 0.9695
+Epoch    1 | train_loss: 0.0700 - train_accuracy: 0.9810 - valid_loss: 0.0604 - valid_accuracy: 0.9816

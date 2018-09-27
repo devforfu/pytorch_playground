@@ -44,7 +44,7 @@ def main():
     }
 
     n_epochs = 3
-    batch_size = 10000
+    batch_size = 4096
     num_workers = 0  # cpu_count()
 
     datasets = load_dataset(data_transforms, batch_size, num_workers)
@@ -56,16 +56,16 @@ def main():
     sched = CosineAnnealingLR(opt, T_max=n_batches/4, eta_min=1e-5)
     loop = Loop(model, opt, sched, device=DEVICE)
 
-    loop.run(train_data=datasets['train']['loader'],
-             valid_data=datasets['valid']['loader'],
-             loss_fn=F.cross_entropy,
-             metrics=[accuracy],
-             callbacks=default_callbacks(),
-             epochs=n_epochs)
+    # loop.run(train_data=datasets['train']['loader'],
+    #          valid_data=datasets['valid']['loader'],
+    #          loss_fn=F.cross_entropy,
+    #          metrics=[accuracy],
+    #          callbacks=default_callbacks(),
+    #          epochs=n_epochs)
 
-    file_name = loop['Checkpoint'].best_model
+    # file_name = loop['Checkpoint'].best_model
     dataset = datasets['valid']['loader']
-    validate_model(model, file_name, dataset, DEVICE)
+    # validate_model(model, file_name, dataset, DEVICE)
     export_to_core_ml(model)
 
 
@@ -85,7 +85,7 @@ def load_dataset(data_transforms, batch_size=1024, num_workers=0,
 
 
 def show_predictions(images, suptitle='', titles=None, dims=(4, 4),
-                     figsize=(12, 12), stats=None):
+                     figsize=(12, 12), stats=STATS):
 
     f, ax = plt.subplots(*dims, figsize=figsize)
     titles = titles or []
@@ -118,7 +118,9 @@ def random_sample(dataset, n=16):
 
 
 def export_to_core_ml(model):
-    dummy_input = torch.randn(16, 1, 28, 28, required_grad=True)
+    model.eval()
+    device = model.fc.weight.device
+    dummy_input = torch.randn(16, 1, 28, 28, requires_grad=True).to(device)
     torch.onnx.export(model, dummy_input, 'model.onnx', export_params=True)
     core_ml_model = convert('model.onnx')
     core_ml_model.save('model.mlmodel')
