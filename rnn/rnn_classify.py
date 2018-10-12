@@ -5,8 +5,12 @@ from collections import Counter, defaultdict
 from multiprocessing import Pool, cpu_count
 
 import numpy as np
+
 import spacy
 from spacy.symbols import ORTH
+
+import torch
+from torch.utils.data import Dataset
 
 from rules import default_rules
 
@@ -21,9 +25,14 @@ BOS, FLD, UNK, PAD = SPECIAL_TOKENS = 'xxbox', 'xxfld', 'xxunk', 'xxpad'
 
 def main():
     datasets = create_or_restore(IMDB)
-    dataset = datasets['train_unsup']
-    sample = dataset.vocab.textify(dataset[0])
-    print(wrap(sample, width=80))
+    train_data = datasets['train_unsup']
+    test_data = datasets['test_unsup']
+
+    it = SequenceIterator(to_sequence(train_data))
+    X, y = next(it)
+    text = train_data.vocab.textify_all(to_np(X))
+    print(text)
+
 
 
 def create_or_restore(path: Path):
@@ -81,7 +90,7 @@ def create_or_restore(path: Path):
     return datasets
 
 
-class ImdbDataset:
+class ImdbDataset(Dataset):
     """Represents the IMDB movie reviews dataset.
 
     The dataset contains 50000 supervised, and 50000 unsupervised movie reviews
@@ -261,6 +270,106 @@ class Vocab:
         return ' '.join([self.itos[number] for number in tokens])
 
 
+def compact_print(string):
+    print('\n'.join(wrap(string, width=80)))
+
+
+
+class SequenceIterator:
+    """A wrapper on top of IMDB dataset that converts numericalized
+    observations into format, suitable to train a language model.
+
+    To train a language model, one needs to convert an unsupervised dataset
+    into two 2D arrays with tokens. The first array contains "previous" words,
+    and the second one - "next" words. Each "previous" word is used to predict
+    the "next" one. Therefore, we're getting a supervised training task.
+    """
+    def __init__(self, seq, bptt=10, split_size=64, random_length=True,
+                 flatten_target=True):
+
+        n_batches = seq.shape[0] // split_size
+        truncated = seq[:n_batches * split_size]
+        batches = truncated.view(split_size, -1).t().contiguous()
+
+        self.bptt = bptt
+        self.split_size = split_size
+        self.random_length = random_length
+        self.flatten_target = flatten_target
+        self.batches = batches
+        self.curr_iter = 0
+        self.curr_line = 0
+        self.total_lines = batches.shape[0]
+        self.total_iters = self.total_lines // self.bptt - 1
+
+    @property
+    def completed(self):
+        if self.curr_line >= self.total_lines - 1:
+            return True
+        if self.curr_iter >= self.total_iters:
+            return True
+        return False
+
+    def __iter__(self):
+        self.curr_line = self.curr_iter = 0
+        return self
+
+    def __next__(self):
+        return self.next()
+
+    def next(self):
+        if self.completed:
+            raise StopIteration()
+        seq_len = self.get_sequence_length()
+        batch = self.get_batch(seq_len)
+        self.curr_line += seq_len
+        self.curr_iter += 1
+        return batch
+
+    def get_sequence_length(self):
+        """
+        Returns a length of sequence taken from the dataset to form a batch.
+
+        By default, this value is based on the value of bptt parameter but
+        randomized during training process to pick sequences of characters with
+        a bit different length.
+        """
+        if self.random_length is None:
+            return self.bptt
+        bptt = self.bptt
+        if np.random.random() >= 0.95:
+            bptt /= 2
+        seq_len = max(5, int(np.random.normal(bptt, 5)))
+        return seq_len
+
+    def get_batch(self, seq_len):
+        """
+        Picks training and target batches from the source depending on current
+        iteration number.
+        """
+        i, source = self.curr_line, self.batches
+        seq_len = min(seq_len, self.total_lines - 1 - i)
+        X = source[i:i + seq_len].contiguous()
+        y = source[(i + 1):(i + 1) + seq_len].contiguous()
+        if self.flatten_target:
+            y = y.view(-1)
+        return X, y
+
+
+def to_sequence(dataset):
+    seq = concat(dataset.train_data if dataset.train else dataset.test_data)
+    return torch.LongTensor(seq)
+
+
+def concat(arrays):
+    seq = []
+    dtype = arrays[0].dtype
+    for arr in arrays:
+        seq.extend(arr.tolist())
+    return np.array(seq, dtype=dtype)
+
+
+def to_np(tensor):
+    return tensor.detach().cpu().numpy()
 
 
 if __name__ == '__main__':
