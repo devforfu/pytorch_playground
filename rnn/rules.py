@@ -66,11 +66,12 @@ def fix_html(x: str, unknown_token: str='xxunk') -> str:
     return re1.sub(' ', html.unescape(x))
 
 
+# Note that the order of rules matters
 default_rules = (
-    spec_add_spaces,
-    rm_useless_spaces,
+    fix_html,
     replace_char_repetitions,
     replace_word_repetitions,
     replace_capitalized,
-    fix_html
+    spec_add_spaces,
+    rm_useless_spaces,
 )
