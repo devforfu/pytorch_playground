@@ -10,6 +10,7 @@ import spacy
 from spacy.symbols import ORTH
 
 import torch
+from torch import nn
 from torch.utils.data import Dataset
 
 from rules import default_rules
@@ -30,8 +31,9 @@ def main():
 
     it = SequenceIterator(to_sequence(train_data))
     X, y = next(it)
-    text = train_data.vocab.textify_all(to_np(X))
-    print(text)
+    texts = train_data.vocab.textify_all(to_np(X).T)
+    for line in texts:
+        print(line.split())
 
 
 
@@ -370,6 +372,84 @@ def concat(arrays):
 
 def to_np(tensor):
     return tensor.detach().cpu().numpy()
+
+
+class RNNCore(nn.Module):
+
+    init_range = 0.1
+
+    def __init__(self, vocab_sz: int, embed_sz: int, n_hidden: int,
+                 n_layers: int, pad_idx: int):
+
+        def get_size(l):
+            """Returns RNN cell input and hidden size depending on its position
+            in the network.
+            """
+            if l == 0:
+                return embed_sz, n_hidden
+            elif l == n_layers - 1:
+                return n_hidden, embed_sz
+            return n_hidden, n_hidden
+
+
+        def create_lstm():
+            return [nn.LSTM(*get_size(l), 1) for l in range(n_layers)]
+
+
+        super().__init__()
+        self.encoder = nn.Embedding(vocab_sz, embed_sz, padding_idx=pad_idx)
+        self.rnns = nn.ModuleList(create_lstm())
+
+        self.hidden_sizes = [layer.hidden_size for layer in self.rnn]
+        self.embed_sz = embed_sz
+        self.n_hidden = n_hidden
+        self.n_layers = n_layers
+        self.bs = None
+        self.hidden = None
+        self.weights = None
+        self._init()
+
+    def forward(self, tensor):
+        seq_len, bs = tensor.size()
+        if bs != self.bs:
+            self.bs = bs
+            self.reset()
+
+        raw_output = self.encoder(tensor)
+        raw_outputs, new_hidden = [], []
+        for index, rnn in enumerate(self.rnns):
+            raw_output, new_h = rnn(raw_output, self.hidden[index])
+            new_hidden.append(new_h)
+            raw_outputs.append(raw_output)
+        self.hidden = truncate_history(new_hidden)
+        return raw_outputs
+
+    def reset(self):
+        [r.reset() for r in self.rnns if hasattr(r, 'reset')]
+
+    def create_hidden(self):
+        self.reset()
+        self.weights = next(self.parameters()).data
+        self.hidden = [
+            (self._hidden(sz), self._hidden(sz))
+            for sz in self.hidden_sizes]
+
+    def _hidden(self, index):
+        return self.weights.new(1, self.bs, self.hidden_sizes[index]).zero_()
+
+    def _init(self):
+        a = self.init_range
+        self.encoder.weight.data.uniform_(-a, a)
+
+
+def truncate_history(v):
+    """
+    Detaches tensor from its computational history.
+    """
+    if type(v) == torch.Tensor:
+        return v.detach()
+    else:
+        return tuple(truncate_history(x) for x in v)
 
 
 if __name__ == '__main__':
