@@ -11,9 +11,13 @@ from spacy.symbols import ORTH
 
 import torch
 from torch import nn
+from torch import optim
+from torch.nn import functional as F
 from torch.utils.data import Dataset
 
 from rules import default_rules
+from core.loop import Loop
+from core.schedule import CosineAnnealingLR
 
 
 IMDB = Path.home() / 'data' / 'aclImdb'
@@ -35,6 +39,21 @@ def main():
     for line in texts:
         print(line.split())
 
+    bs = 64
+    bptt = 10
+
+    train = SequenceIterator(to_sequence(train_data), bptt, bs)
+    valid = SequenceIterator(to_sequence(test_data), bptt, bs)
+
+    lm = LanguageModel(
+        vocab_sz=train_data.vocab.size,
+        embed_sz=400, n_hidden=1000)
+
+    opt = optim.Adam(lm.parameters(), lr=1e-3, betas=(0.8, 0.99))
+    cycle_length = len(train_data) // bs
+    sched = CosineAnnealingLR(opt, t_max=cycle_length, eta_min=1e-5)
+    loop = Loop(lm, opt, sched, device=device())
+    loop.run(train, valid, loss_fn=F.cross_entropy)
 
 
 def create_or_restore(path: Path):
@@ -400,7 +419,7 @@ class RNNCore(nn.Module):
         self.encoder = nn.Embedding(vocab_sz, embed_sz, padding_idx=pad_idx)
         self.rnns = nn.ModuleList(create_lstm())
 
-        self.hidden_sizes = [layer.hidden_size for layer in self.rnn]
+        self.hidden_sizes = [layer.hidden_size for layer in self.rnns]
         self.embed_sz = embed_sz
         self.n_hidden = n_hidden
         self.n_layers = n_layers
@@ -409,11 +428,15 @@ class RNNCore(nn.Module):
         self.weights = None
         self._init()
 
+    @property
+    def output_size(self):
+        return self.hidden_sizes[-1]
+
     def forward(self, tensor):
         seq_len, bs = tensor.size()
         if bs != self.bs:
             self.bs = bs
-            self.reset()
+            self.create_hidden()
 
         raw_output = self.encoder(tensor)
         raw_outputs, new_hidden = [], []
@@ -434,12 +457,39 @@ class RNNCore(nn.Module):
             (self._hidden(sz), self._hidden(sz))
             for sz in self.hidden_sizes]
 
-    def _hidden(self, index):
-        return self.weights.new(1, self.bs, self.hidden_sizes[index]).zero_()
+    def _hidden(self, sz):
+        return self.weights.new(1, self.bs, sz).zero_()
 
     def _init(self):
         a = self.init_range
         self.encoder.weight.data.uniform_(-a, a)
+
+
+class LanguageModel(nn.Module):
+    """A RNN-based model predicting next word from the previous one."""
+
+    init_range = 0.1
+
+    def __init__(self, vocab_sz: int, embed_sz: int, n_hidden: int=1000,
+                 n_layers: int=3, bias: bool=True, padding_idx=1):
+
+        super().__init__()
+        self.rnn = RNNCore(vocab_sz, embed_sz, n_hidden, n_layers, padding_idx)
+        self.decoder = nn.Linear(self.rnn.output_size, vocab_sz, bias=bias)
+        self._init(bias)
+
+    def forward(self, tensor):
+        raw_outputs = self.rnn.forward(tensor)
+        last = raw_outputs[-1]
+        input_shape = last.size(0)*last.size(1), last.size(2)
+        decoded = self.decoder(last.view(input_shape))
+        return decoded
+
+    def _init(self, bias):
+        a = self.init_range
+        self.decoder.weight.data.uniform_(-a, a)
+        if bias:
+            self.decoder.bias.data.zero_()
 
 
 def truncate_history(v):
@@ -450,6 +500,10 @@ def truncate_history(v):
         return v.detach()
     else:
         return tuple(truncate_history(x) for x in v)
+
+
+def device(i=0):
+    return torch.device(f'cuda:{i}' if torch.cuda.is_available() else 'cpu')
 
 
 if __name__ == '__main__':
