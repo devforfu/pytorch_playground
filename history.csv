@@ -1,3 +1,11 @@
-Epoch    0 | train_loss: 0.5815 - train_accuracy: 0.8527 - valid_loss: 1.6147 - valid_accuracy: 0.5849
-Epoch    1 | train_loss: 0.2555 - train_accuracy: 0.9341 - valid_loss: 0.8070 - valid_accuracy: 0.7912
-Epoch    2 | train_loss: 0.1441 - train_accuracy: 0.9624 - valid_loss: 0.5339 - valid_accuracy: 0.8611
+Epoch    0 | train_loss: 6.7079 - train_accuracy: 0.0490 - valid_loss: 6.6563 - valid_accuracy: 0.0496
+Epoch    1 | train_loss: 5.7009 - train_accuracy: 0.1391 - valid_loss: 5.6151 - valid_accuracy: 0.1417
+Epoch    2 | train_loss: 5.3068 - train_accuracy: 0.1724 - valid_loss: 5.2317 - valid_accuracy: 0.1753
+Epoch    3 | train_loss: 5.1402 - train_accuracy: 0.1867 - valid_loss: 5.0796 - valid_accuracy: 0.1894
+Epoch    4 | train_loss: 5.0377 - train_accuracy: 0.1954 - valid_loss: 4.9831 - valid_accuracy: 0.1982
+Epoch    5 | train_loss: 4.9522 - train_accuracy: 0.2032 - valid_loss: 4.9313 - valid_accuracy: 0.2044
+Epoch    6 | train_loss: 4.8743 - train_accuracy: 0.2094 - valid_loss: 4.8900 - valid_accuracy: 0.2088
+Epoch    7 | train_loss: 4.8108 - train_accuracy: 0.2167 - valid_loss: 4.7980 - valid_accuracy: 0.2182
+Epoch    8 | train_loss: 4.7780 - train_accuracy: 0.2197 - valid_loss: 4.7561 - valid_accuracy: 0.2220
+Epoch    9 | train_loss: 4.7674 - train_accuracy: 0.2220 - valid_loss: 4.7305 - valid_accuracy: 0.2245
+Epoch   10 | train_loss: 4.7342 - train_accuracy: 0.2242 - valid_loss: 4.7257 - valid_accuracy: 0.2253

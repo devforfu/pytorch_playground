@@ -1,7 +1,0 @@
-.*
-!.gitignore
-**/*.png
-**/*.py[cod]
-~*
-*.weights
-*.ini

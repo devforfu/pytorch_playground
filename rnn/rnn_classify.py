@@ -1,4 +1,5 @@
 import pickle
+import argparse
 from textwrap import wrap
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -17,7 +18,9 @@ from torch.utils.data import Dataset
 
 from rules import default_rules
 from core.loop import Loop
+from core.metrics import accuracy
 from core.schedule import CosineAnnealingLR
+from core.callbacks import default_callbacks
 
 
 IMDB = Path.home() / 'data' / 'aclImdb'
@@ -33,27 +36,38 @@ def main():
     train_data = datasets['train_unsup']
     test_data = datasets['test_unsup']
 
-    it = SequenceIterator(to_sequence(train_data))
-    X, y = next(it)
-    texts = train_data.vocab.textify_all(to_np(X).T)
-    for line in texts:
-        print(line.split())
-
-    bs = 64
-    bptt = 10
+    bs = 50
+    bptt = 70
 
     train = SequenceIterator(to_sequence(train_data), bptt, bs)
     valid = SequenceIterator(to_sequence(test_data), bptt, bs)
 
     lm = LanguageModel(
         vocab_sz=train_data.vocab.size,
-        embed_sz=400, n_hidden=1000)
+        embed_sz=400, n_hidden=1150)
 
-    opt = optim.Adam(lm.parameters(), lr=1e-3, betas=(0.8, 0.99))
+    dev = device(force_cpu=True) if args.use_cpu else device(args.cuda)
+    print('Selected device: %s' % dev)
+
+    opt = optim.Adam(
+        lm.parameters(), lr=1e-3, weight_decay=1e-7, betas=(0.8, 0.99))
     cycle_length = len(train_data) // bs
-    sched = CosineAnnealingLR(opt, t_max=cycle_length, eta_min=1e-5)
-    loop = Loop(lm, opt, sched, device=device())
-    loop.run(train, valid, loss_fn=F.cross_entropy)
+    sched = CosineAnnealingLR(opt, t_max=cycle_length, cycle_mult=1, eta_min=1e-5)
+    loop = Loop(lm, opt, sched, device=dev)
+
+    loop.run(train_data=train, valid_data=valid,
+             loss_fn=F.cross_entropy,
+             metrics=[accuracy],
+             callbacks=default_callbacks())
+
+    best_model = loop['Checkpoint'].best_model
+    print('Best model: %s' % best_model)
+    with open('best', 'w') as file:
+        file.write(best_model + '\n')
+
+
+def parse_args():
+    argparse.ArgumentParser()
 
 
 def create_or_restore(path: Path):
@@ -400,13 +414,13 @@ class RNNCore(nn.Module):
     def __init__(self, vocab_sz: int, embed_sz: int, n_hidden: int,
                  n_layers: int, pad_idx: int):
 
-        def get_size(l):
+        def get_size(index):
             """Returns RNN cell input and hidden size depending on its position
             in the network.
             """
-            if l == 0:
+            if index == 0:
                 return embed_sz, n_hidden
-            elif l == n_layers - 1:
+            elif index == n_layers - 1:
                 return n_hidden, embed_sz
             return n_hidden, n_hidden
 
@@ -465,6 +479,39 @@ class RNNCore(nn.Module):
         self.encoder.weight.data.uniform_(-a, a)
 
 
+class WeightDropout(nn.Module):
+
+    def __init__(self, module: nn.Module, weight_p: float,
+                 layer_names=('weight_hh_10')):
+
+        super().__init__()
+        self.module = module
+        self.weight_p = weight_p
+        self.layer_names = layer_names
+
+        for layer in self.layer_names:
+            w = getattr(self.module, layer)
+            self.register_parameter(f'{layer}_raw', nn.Parameter(w.data))
+
+    def forward(self, *tensors):
+        self._set_weights()
+        return self.module.forward(*tensors)
+
+    def reset(self):
+        for layer in self.layer_names:
+            raw_w = getattr(self, f'{layer}_raw')
+            self.module._parameters[layer] = F.dropout(
+                raw_w, p=self.weight_p, training=False)
+        if hasattr(self.module, 'reset'):
+            self.module.reset()
+
+    def _set_weights(self):
+        for layer in self.layer_names:
+            raw_w = getattr(self, f'{layer}_raw')
+            self.module._parameters[layer] = F.dropout(
+                raw_w, p=self.weight_p, training=self.training)
+
+
 class LanguageModel(nn.Module):
     """A RNN-based model predicting next word from the previous one."""
 
@@ -502,8 +549,11 @@ def truncate_history(v):
         return tuple(truncate_history(x) for x in v)
 
 
-def device(i=0):
-    return torch.device(f'cuda:{i}' if torch.cuda.is_available() else 'cpu')
+def device(i=0, force_cpu=True):
+    name = f'cuda:{i}' if torch.cuda.is_available() else 'cpu'
+    if force_cpu:
+        name = 'cpu'
+    return torch.device(name)
 
 
 if __name__ == '__main__':
