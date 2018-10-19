@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
+import pickle
+from random import shuffle
 import shutil
 
 from fastai.text import TextDataset
@@ -11,12 +13,18 @@ LYRICS_PATH = DATA_ROOT / 'azlyrics' / 'many'
 
 
 def main():
-    prepare_lyrics(LYRICS_PATH, LYRICS_PATH.parent/'prepared')
-    dataset = TextDataset.from_folder(LYRICS_PATH)
+    meta = prepare_lyrics(LYRICS_PATH, LYRICS_PATH.parent/'prepared')
+    dataset = TextDataset.from_folder(meta.folder)
     print(f'Dataset size: {len(dataset)}')
 
 
-def prepare_lyrics(src, dst, test_size: float=0.2):
+def prepare_lyrics(src, dst, test_size: float=0.2) -> 'LyricsData':
+    meta = dst/'meta.pickle'
+
+    if meta.exists():
+        with meta.open('rb') as file:
+            return pickle.load(file)
+
     classes, songs = [], {}
 
     for subdir in src.glob('*'):
@@ -25,11 +33,12 @@ def prepare_lyrics(src, dst, test_size: float=0.2):
         author_songs = {}
         with (subdir/'songs.csv').open() as file:
             for line in file:
-                index, name = line.split(',')
+                index, _, name = line.partition(',')
                 author_songs[int(index)] = name.strip()
         songs[author] = author_songs
 
         files = list(subdir.glob('*.txt'))
+        shuffle(files)
         sz = int(len(files) * (1 - test_size))
         train, test = files[:sz], files[sz:]
 
@@ -40,10 +49,15 @@ def prepare_lyrics(src, dst, test_size: float=0.2):
 
         test_dir = dst/'test'/author
         test_dir.mkdir(parents=True, exist_ok=True)
-        for filename in test:
-            shutil.copy(filename, test_dir/filename)
+        for txt_file in test:
+            shutil.copy(txt_file, test_dir/txt_file.name)
 
-    return LyricsData(dst, classes, songs)
+    data = LyricsData(dst, classes, songs)
+
+    with meta.open('wb') as file:
+        pickle.dump(data, file)
+
+    return data
 
 
 @dataclass
