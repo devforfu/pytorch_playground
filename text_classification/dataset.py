@@ -109,6 +109,16 @@ class IMDB(Dataset):
         with path.open('wb') as file:
             pickle.dump(self, file)
 
+    @property
+    def ids(self):
+        if self.train:
+            return self.train_data
+        return self.test_data
+
+    @property
+    def vocab_size(self):
+        return self.vocab.size
+
     @staticmethod
     def load(path: Path):
         with path.open('rb') as file:
@@ -128,6 +138,7 @@ class IMDB(Dataset):
 
         with tarfile.open(archive) as arch:
             arch.extractall(path)
+
 
 
 def identity(x):
