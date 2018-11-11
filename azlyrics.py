@@ -12,6 +12,7 @@ import os
 import time
 import argparse
 import configparser
+from pathlib import Path
 from urllib.parse import urljoin
 from string import ascii_letters, digits
 
@@ -109,7 +110,7 @@ def parse_args():
     parser.add_argument(
         '-a', '--artist',
         default='Black Sabbath',
-        help='an artist whose songs to parse'
+        help='an artist whose songs to parse; is used only if -f is missing'
     )
     parser.add_argument(
         '-p', '--proxy',
@@ -127,6 +128,16 @@ def parse_args():
         type=float,
         help='base throttling value used to define delay between requests'
     )
+    parser.add_argument(
+        '-f', '--file',
+        default=None,
+        help='path to file with artist names'
+    )
+    parser.add_argument(
+        '--force-reload',
+        action='store_true',
+        help='load songs texts even if folder with artist name already exists'
+    )
 
     args = parser.parse_args()
 
@@ -137,35 +148,60 @@ def parse_args():
         url = 'socks5://{username}:{password}@{host}:{port}'.format(**proxy)
         args.proxy = {'http': url, 'https': url}
 
-    if args.output is None:
-        args.output = os.path.expanduser(f'~/data/azlyrics/{args.artist}')
+    args.output = Path(args.output or '~/data/azlyrics').expanduser()
+
+    if args.file is None:
+        artists = [args.artist]
+
+    else:
+        path = Path(args.file)
+        if not path.exists():
+            parser.error(f'File does not exist: {args.file}')
+
+        artists = {line.strip() for line in Path(args.file).open()}
+
+        if not args.force_reload:
+            for dirname in args.output.iterdir():
+                artist = dirname.stem
+                if artist in artists:
+                    print(f'Artist folder already exists: {artist}')
+                    artists.remove(artist)
+
+    args.artists = sorted(artists)
 
     return args
 
 
 def main():
+    print('Instantiating lyrics parser')
+
     args = parse_args()
-
     parser = AZLyricsParser(throttling=args.throttling, proxy=args.proxy)
-    songs = parser.build_songs_list(args.artist)
+    artists = args.artists
 
-    if not songs:
-        return
+    for i, artist in enumerate(artists, 1):
+        print(f'Building list of songs URLs for artist {artist}',
+              f'({i} of {len(artists)})')
 
-    folder = args.output
-    texts = parser.parse_songs(songs)
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+        songs = parser.build_songs_list(artist)
+        if not songs:
+            print('Songs not found. Skipping...')
+            continue
 
-    index_path = os.path.join(folder, 'songs.csv')
-    with open(index_path, 'w') as index_file:
-        for i, (title, text) in enumerate(texts):
-            index_file.write(f'{i},{title}\n')
-            filename = os.path.join(folder, f'{i}.txt')
-            with open(filename, 'w') as text_file:
-                text_file.write(text + '\n')
+        print(f'Parsing collected songs ({len(songs)} total)')
+        folder = args.output/artist
+        texts = parser.parse_songs(songs)
+        if not folder.exists():
+            folder.mkdir(parents=True, exist_ok=True)
 
-    print(f'Completed! Index path: {index_path}')
+        index_path = Path(folder).joinpath('songs.csv')
+        with index_path.open('w') as index_file:
+            for j, (title, text) in enumerate(texts):
+                index_file.write(f'{j},{title}\n')
+                with (folder/f'{j}.txt').open('w') as text_file:
+                    text_file.write(text + '\n')
+
+        print(f'Completed! Index path: {index_path}')
 
 
 if __name__ == '__main__':
