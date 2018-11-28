@@ -2,6 +2,7 @@
 Splits folders with songs into training and validation subsets.
 """
 import argparse
+import json
 from pathlib import Path
 import random
 
@@ -44,8 +45,10 @@ def main():
                 new_file = new_dir/old_file.name
                 new_file.open('w').write(old_file.open().read())
 
-    pd.DataFrame(meta).to_json(
-        args.output/'songs.json', orient='records', index=False)
+    with (args.output/'songs.json').open('w') as file:
+        json.dump(json.loads(
+            pd.DataFrame(meta).to_json(orient='records')),
+            file, indent=2)
 
     print('Files copied into folder ', args.output)
 
